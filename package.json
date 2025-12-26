@@ -1,0 +1,45 @@
+{
+  "name": "mcp-ssh-persistent",
+  "version": "1.0.0",
+  "description": "MCP Server for persistent SSH connections with streaming support",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "mcp-ssh-persistent": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "ssh",
+    "claude",
+    "model-context-protocol",
+    "persistent",
+    "streaming",
+    "sftp",
+    "claude-code"
+  ],
+  "author": "Duy Pham",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vivusk/mcp-ssh-persistent.git"
+  },
+  "homepage": "https://github.com/Vivusk/mcp-ssh-persistent#readme",
+  "bugs": {
+    "url": "https://github.com/Vivusk/mcp-ssh-persistent/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ssh2": "^1.16.0"
+  }
+}
