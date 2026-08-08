@@ -5,7 +5,7 @@
   "type": "module",
   "main": "src/index.js",
   "bin": {
-    "mcp-ssh-persistent": "./src/index.js"
+    "mcp-ssh-persistent": "src/index.js"
   },
   "scripts": {
     "start": "node src/index.js"
