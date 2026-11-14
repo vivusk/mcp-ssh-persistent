@@ -2,7 +2,8 @@
  * Live smoke cases for shell streams (phase 03), used by scripts/smoke-test.js.
  * Read-only commands only. Checks marker-prompt completion latency, stateful
  * cwd, verbatim data, history untouched (sha256 before/after), no output
- * mixing between concurrent streams, and the D12 channel budget.
+ * mixing between concurrent streams, and the D12 channel budget (incl. the
+ * cached SFTP channel).
  */
 const HISTORY_HASH = 'sha256sum ~/.bash_history 2>/dev/null || echo none';
 
@@ -64,14 +65,19 @@ export async function runStreamChecks(pool, session, check) {
   await channelBudget(pool, session, check);
 }
 
-/** D12: 4 streams + 3 parallel execs succeed; a 5th stream gets the cap error. */
+/** D12: 4 streams + cached SFTP op + 3 parallel execs succeed; a 5th stream gets the cap error. */
 async function channelBudget(pool, session, check) {
   const ids = ['budget-1', 'budget-2', 'budget-3', 'budget-4'];
   try {
     for (const id of ids) await pool.openStream(session.alias, id);
     const t0 = Date.now();
-    const execs = await Promise.all([1, 2, 3].map(() => session.exec.exec('sleep 1; echo ok')));
-    check('4 streams + 3 parallel execs', execs.every((r) => r.exitCode === 0 && r.stdout.trim() === 'ok'), `${Date.now() - t0} ms`);
+    const [file, ...execs] = await Promise.all([
+      session.sftp.readRemoteFile('/etc/hostname'),
+      ...[1, 2, 3].map(() => session.exec.exec('sleep 1; echo ok')),
+    ]);
+    check('4 streams + SFTP op + 3 parallel execs',
+      execs.every((r) => r.exitCode === 0 && r.stdout.trim() === 'ok') && file.bytes > 0,
+      `${Date.now() - t0} ms, sftp channels opened ${session.sftp.opens}`);
     let err = null;
     try { await pool.openStream(session.alias, 'budget-5'); } catch (e) { err = e; }
     check('5th stream -> cap error', /^max 4 streams for /.test(err?.message || ''), err?.message || 'no error');

@@ -100,7 +100,7 @@ export function getToolDefinitions(aliases = safeAliases()) {
     },
     {
       name: 'ssh_upload',
-      description: 'Upload a local file to a server via SFTP.',
+      description: 'Upload a local file to a server via SFTP (parallel fastPut). local_path must lie under os.tmpdir() or a configured localPathRoots dir; key dirs, ~/.ssh, ~/.claude, the MCP server repo/config and any .claude/.git dir, .mcp.json or CLAUDE.md are always refused. Returns one line: path, bytes, ms.',
       inputSchema: schema({
         server,
         local_path: { type: 'string', description: 'Local file path to upload' },
@@ -109,7 +109,7 @@ export function getToolDefinitions(aliases = safeAliases()) {
     },
     {
       name: 'ssh_download',
-      description: 'Download a remote file to local via SFTP.',
+      description: 'Download a remote file via SFTP (parallel fastGet to a .part file, then renamed over the target: no half files). Same local path policy as ssh_upload. Returns one line: path, bytes, ms.',
       inputSchema: schema({
         server,
         remote_path: { type: 'string', description: 'Remote file path to download' },
@@ -118,16 +118,17 @@ export function getToolDefinitions(aliases = safeAliases()) {
     },
     {
       name: 'ssh_write_remote_file',
-      description: 'Write content directly to a remote file via SFTP (no shell escaping).',
+      description: 'Write content to a remote file via SFTP (no shell escaping). Atomic: writes a temp file in the same dir, keeps the existing file mode/owner, then renames over the target. Falls back to an in-place write (with a warning) when the dir is not writable.',
       inputSchema: schema({
         server,
         remote_path: { type: 'string', description: 'Remote file path to write' },
-        content: { type: 'string', description: 'File content' },
+        content: { type: 'string', description: 'File content (UTF-8 text)' },
+        mode: { type: 'string', description: 'Optional octal mode, e.g. "600" (default: existing file mode, else 644)' },
       }, ['server', 'remote_path', 'content']),
     },
     {
       name: 'ssh_read_remote_file',
-      description: 'Read a remote file via SFTP.',
+      description: 'Read a remote text file via SFTP. Returns "# <path> (<bytes> bytes)" then the raw content. Files above limits.maxReadFileBytes (default 2 MB) or binary files are refused (use ssh_exec with head/tail/sed -n, or ssh_download).',
       inputSchema: schema({
         server,
         remote_path: { type: 'string', description: 'Remote file path to read' },

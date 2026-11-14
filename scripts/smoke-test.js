@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Live smoke test (read-only) against one configured alias.
+ * Live smoke test against one configured alias (read-only, except SFTP
+ * cases writing under /tmp/mcp-ssh-smoke-<rand>/ which are removed).
  * Usage: npm run smoke -- <alias>
  * Connects through the session pool, runs read-only commands (exec + shell
  * streams), prints results
@@ -10,6 +11,7 @@ import { createSessionPool } from '../src/ssh/session-pool.js';
 import { getKnownHostsPath } from '../src/config/known-hosts-fingerprint-store.js';
 import { readFileSync } from 'fs';
 import { runStreamChecks } from './smoke-test-stream-cases.js';
+import { runSftpChecks } from './smoke-test-sftp-cases.js';
 
 const alias = process.argv[2];
 if (!alias) {
@@ -63,6 +65,7 @@ try {
   const par = await Promise.all([1, 2, 3, 4, 5, 6].map((i) => session.exec.exec(`sleep 0.3; echo p${i}`)));
   check('6 parallel execs (limit 4, queued)', par.every((r, i) => r.stdout.trim() === `p${i + 1}`), `${Date.now() - t0} ms`);
 
+  await runSftpChecks(session, check); // leaves the cached SFTP channel open for the D12 case
   await runStreamChecks(pool, session, check);
 
   const again = await pool.getSession(alias);

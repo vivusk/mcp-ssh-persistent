@@ -8,6 +8,8 @@ import { formatStreamResult } from './format-stream-result.js';
 import { listServerAliases } from '../config/load-config-and-server-aliases.js';
 import { log } from '../utils/logger.js';
 import { getSudoPassword } from '../security/windows-credential-sudo-password.js';
+import { assertLocalPathAllowed } from '../security/local-path-policy.js';
+import { join, posix } from 'path';
 
 const DEFAULT_EXEC_TIMEOUT = 30000;
 const START_WAIT_MS = 2000;
@@ -144,27 +146,36 @@ export function createHandlers(pool, { getSudoPassword: getPw = getSudoPassword 
       const server = requireString(args, 'server');
       const local = requireString(args, 'local_path');
       const remote = requireString(args, 'remote_path');
-      return jsonResponse(await pool.withSession(server, (s) => s.sftp.upload(local, remote)));
+      assertLocalPathAllowed(local, { mustExist: true }); // before connect; SSHSFTP re-checks
+      const r = await pool.withSession(server, (s) => s.sftp.upload(local, remote));
+      return textResponse(`uploaded ${r.localPath} -> ${r.remotePath} (${r.bytes} bytes, ${r.ms} ms)`);
     },
 
     async ssh_download(args) {
       const server = requireString(args, 'server');
       const remote = requireString(args, 'remote_path');
       const local = requireString(args, 'local_path');
-      return jsonResponse(await pool.withSession(server, (s) => s.sftp.download(remote, local)));
+      assertLocalPathAllowed(/[\\/]$/.test(local) ? join(local, posix.basename(remote)) : local, { forWrite: true }); // before connect
+      const r = await pool.withSession(server, (s) => s.sftp.download(remote, local));
+      return textResponse(`downloaded ${r.remotePath} -> ${r.localPath} (${r.bytes} bytes, ${r.ms} ms)`);
     },
 
     async ssh_write_remote_file(args) {
       const server = requireString(args, 'server');
       const remote = requireString(args, 'remote_path');
       if (typeof args.content !== 'string') throw new Error('"content" is required');
-      return jsonResponse(await pool.withSession(server, (s) => s.sftp.writeFile(remote, args.content)));
+      const r = await pool.withSession(server, (s) => s.sftp.writeRemoteFile(remote, args.content, { mode: args.mode }));
+      const warn = r.warning ? ` [warn: ${r.warning}]` : '';
+      const via = r.target ? ` (via symlink -> ${r.target})` : '';
+      return textResponse(`wrote ${r.remotePath}${via} (${r.bytes} bytes, mode ${r.mode})${warn}`);
     },
 
     async ssh_read_remote_file(args) {
       const server = requireString(args, 'server');
       const remote = requireString(args, 'remote_path');
-      return jsonResponse(await pool.withSession(server, (s) => s.sftp.readFile(remote)));
+      const r = await pool.withSession(server, (s) => s.sftp.readRemoteFile(remote));
+      return textResponse(`# ${r.remotePath} (${r.bytes} bytes)
+${r.content}`);
     },
   };
 

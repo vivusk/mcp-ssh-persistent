@@ -36,11 +36,10 @@ export function createSessionPool(deps = {}) {
     openShell,
   });
 
-  /** Build a session around a connection (legacy sftp class until phase 05). */
+  /** Build a session around a connection (exec limiter, streams, cached SFTP channel). */
   function buildSession(server, connection) {
     const limits = getLimits();
     const getClient = () => connection.getClient();
-    const isConnected = () => connection.isConnected();
     return {
       alias: server.alias,
       server,
@@ -51,7 +50,7 @@ export function createSessionPool(deps = {}) {
         maxOutputBytes: limits.maxOutputBytes,
       }),
       streams: new Map(), // stream_id -> ShellStream (null while opening)
-      sftp: new SSHSFTP(getClient, isConnected),
+      sftp: new SSHSFTP(getClient, { alias: server.alias, getLimits }),
     };
   }
 
@@ -62,6 +61,7 @@ export function createSessionPool(deps = {}) {
     streams.forgetAlias(session.alias);
     for (const stream of session.streams.values()) stream?.close();
     session.streams.clear();
+    session.sftp.close();
   }
 
   async function connectSession(server) {
