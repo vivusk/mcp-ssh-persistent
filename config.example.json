@@ -1,0 +1,24 @@
+{
+  "defaults": {
+    "privateKeyPath": "<path-to-private-key>",
+    "port": 22,
+    "useAgent": false,
+    "keepaliveInterval": 15000,
+    "keepaliveCountMax": 3,
+    "readyTimeout": 10000
+  },
+  "servers": {
+    "web": { "host": "203.0.113.10", "username": "deploy" },
+    "db": { "host": "203.0.113.20", "username": "root", "port": 2222 },
+    "lab": { "host": "203.0.113.30", "username": "ops", "useAgent": true, "fingerprint": "SHA256:<base64-no-padding>" }
+  },
+  "localPathRoots": ["<your-workspace-dir>"],
+  "localPathDeny": [],
+  "limits": {
+    "maxOutputBytes": 102400,
+    "maxReadFileBytes": 2097152,
+    "streamBufferBytes": 524288,
+    "maxStreams": 4,
+    "maxConcurrentExec": 4
+  }
+}

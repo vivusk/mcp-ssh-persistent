@@ -1,214 +1,194 @@
 # mcp-ssh-persistent
 
-MCP server for persistent SSH connections with streaming support for Claude Code.
+MCP server for Claude Code that keeps SSH connections open to named servers and supports streaming shells.
 
 ## Features
 
-- **Persistent Connections** - Connect once, run multiple commands
-- **Dual Channel Support**
-  - `ssh_exec` - Stateless commands with exit codes
-  - `ssh_stream_*` - Stateful interactive sessions
-- **Auto-Read Output** - `ssh_stream_write` returns output immediately
-- **SFTP Support** - Upload/download files directly
-- **Prompt Detection** - Auto-detects command completion
+- **Server aliases.** Every tool takes `server: "<alias>"`. Host, user and key live in a local `config.json`, so they never appear in prompts. The first call to an alias connects lazily. A dropped connection reconnects once on the next call. Keepalive is 15 s × 3.
+- **Host-key pinning (TOFU).** The first connect pins the server's `SHA256:` fingerprint in `known-hosts.json`. On a mismatch the server refuses to connect. You can also pre-set `fingerprint` per server in config.
+- **No secrets in the LLM context.**
+  - Config rejects any `password` key.
+  - Sudo uses a password stored in Windows Credential Manager (WCM). The model never sees or types it.
+  - Logs and responses go through secret redaction.
+- **Exact command completion.** Stream shells use a unique prompt marker, so a write returns as soon as the command finishes. The server also detects input prompts.
+- **Local path policy.** Uploads and downloads only touch allowed directories. Key dirs and agent config are always denied.
+- **Atomic remote writes.** The server writes a temp file, keeps the mode and owner, then renames it over the target. Remote symlinks are followed.
+- **Fast SFTP.** Transfers use parallel `fastPut`/`fastGet` over one cached SFTP channel per server.
+- **Bounded output.** Exec output is capped: the first 20% and last 80% are kept, with a `[truncated N bytes]` marker. Stream buffers are capped, and multi-byte UTF-8 characters are never split.
+- **Channel budget.** Per-server limits stay below the default OpenSSH `MaxSessions 10`. Extra exec calls wait in a queue instead of failing.
 
 ## Requirements
 
-- Node.js >= 18
-- Claude Code CLI or Claude Desktop
+- Node.js >= 18 (tested on 24).
+- Windows for `sudo` support (Windows Credential Manager). Other tools work on any OS.
+- `bash` on each remote server: `ssh_exec sudo:true` runs `bash -c`, and stream shells assume a bash login shell.
 
-## Installation
+## Setup
 
-### Option 1: npx (Recommended)
+1. Clone and install:
+   ```bash
+   git clone https://github.com/Vivusk/mcp-ssh-persistent.git
+   cd mcp-ssh-persistent && npm install
+   ```
+2. Create your config:
+   ```bash
+   cp config.example.json config.json
+   ```
+   Edit `config.json` (it is gitignored):
+   - add your aliases;
+   - set `localPathRoots` to your workspace dir(s). **If you skip this, uploads and downloads outside the OS temp dir are rejected.**
 
-No installation needed - just configure and use.
+   Set the env var `MCP_SSH_CONFIG` to use a config file somewhere else. `known-hosts.json` is kept next to the config file.
+3. Optional, for sudo: store the sudo password of a remote user in Windows Credential Manager. A hidden prompt asks for the password:
+   ```bash
+   npm run set-sudo-password -- <remote-username>
+   ```
+   The WCM entry is named `mcp-ssh-persistent:sudo:<remote-username>`. `<remote-username>` is the `username` of the alias.
+4. Register the server with Claude Code, e.g. in a project `.mcp.json`:
+   ```json
+   {
+     "mcpServers": {
+       "ssh": {
+         "command": "node",
+         "args": ["<path-to>/mcp-ssh-persistent/src/index.js"]
+       }
+     }
+   }
+   ```
+   Restart Claude Code. Connect to each alias for the first time from a trusted network, because that first connect pins the host key.
 
-### Option 2: Global Install
-
-```bash
-npm install -g mcp-ssh-persistent
-```
-
-## Configuration
-
-### Claude Code CLI
-
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "ssh": {
-      "command": "npx",
-      "args": ["-y", "mcp-ssh-persistent"]
-    }
-  }
-}
-```
-
-### Claude Desktop (macOS)
-
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "ssh": {
-      "command": "npx",
-      "args": ["-y", "mcp-ssh-persistent"]
-    }
-  }
-}
-```
-
-### Claude Desktop (Windows)
-
-Add to `%APPDATA%\Claude\claude_desktop_config.json`:
+### config.json
 
 ```json
 {
-  "mcpServers": {
-    "ssh": {
-      "command": "npx",
-      "args": ["-y", "mcp-ssh-persistent"]
-    }
-  }
+  "defaults": { "privateKeyPath": "<path-to-private-key>", "port": 22 },
+  "servers": {
+    "web": { "host": "203.0.113.10", "username": "deploy" },
+    "db":  { "host": "203.0.113.20", "username": "root", "port": 2222, "fingerprint": "SHA256:<base64>" },
+    "lab": { "host": "203.0.113.30", "username": "ops", "useAgent": true }
+  },
+  "localPathRoots": ["<your-workspace-dir>"],
+  "localPathDeny": [],
+  "limits": { "maxOutputBytes": 102400, "maxReadFileBytes": 2097152, "streamBufferBytes": 524288, "maxStreams": 4, "maxConcurrentExec": 4 }
 }
 ```
 
-### VS Code with Claude Extension
-
-Add to VS Code settings (`Ctrl+,` → search "claude mcp"):
-
-```json
-{
-  "claude.mcpServers": {
-    "ssh": {
-      "command": "npx",
-      "args": ["-y", "mcp-ssh-persistent"]
-    }
-  }
-}
-```
-
-After configuration, restart Claude Code/Desktop to load the MCP server.
+| Key | Meaning |
+|-----|---------|
+| `defaults` | Values merged into every server: `port` (22), `privateKeyPath`, `useAgent` (false), `keepaliveInterval` (15000), `keepaliveCountMax` (3), `readyTimeout` (10000) |
+| `servers.<alias>` | `host` and `username` are required. Any key from `defaults`, plus an optional `fingerprint`, which wins over `known-hosts.json`. Aliases are case-insensitive. |
+| `useAgent` | Use ssh-agent. Reads `SSH_AUTH_SOCK`; on Windows the default is the OpenSSH agent pipe. |
+| `localPathRoots` | Extra allowed local roots for upload/download. `os.tmpdir()` is always allowed. Relative paths resolve against the config dir. |
+| `localPathDeny` | Extra denied local paths. A deny rule always wins over a root. |
+| `limits` | Output caps and channel budget (see below) |
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `ssh_connect` | Connect to SSH server |
-| `ssh_exec` | Execute command (returns exit code) |
-| `ssh_stream_start` | Start interactive shell |
-| `ssh_stream_write` | Write + auto-read output |
-| `ssh_stream_read` | Read stream buffer |
-| `ssh_stream_stop` | Stop stream |
-| `ssh_upload` | Upload file via SFTP |
-| `ssh_download` | Download file via SFTP |
-| `ssh_write_remote_file` | Write to remote file |
-| `ssh_read_remote_file` | Read remote file |
-| `ssh_status` | Connection status |
-| `ssh_disconnect` | Disconnect |
-| `ssh_reset_shell` | Reset shell state |
+All tools return plain text. **bold** marks required params.
 
-## Usage
+| Tool | Params | Purpose |
+|------|--------|---------|
+| `ssh_exec` | **`server`**, **`command`**, `timeout` (ms, 30000), `pty` (false), `sudo` (false) | Stateless command on an exec channel. Returns stdout, a `--- stderr ---` section when stderr is non-empty, and `[exit: N]` |
+| `ssh_stream_start` | **`server`**, **`stream_id`**, `command`, `wait_ms` (2000) | Opens a stateful shell (history disabled) bound to `stream_id`. `stream_id` must be unique across servers |
+| `ssh_stream_write` | **`stream_id`**, **`data`**, `wait_ms` (5000; 0 = no wait) | Writes `data` verbatim (end it with a newline to press Enter), then waits for the prompt, an input prompt or the timeout |
+| `ssh_stream_read` | **`stream_id`**, `clear` (true), `wait_ms` (0) | Reads buffered output since the last read or write |
+| `ssh_sudo_auth` | **`stream_id`**, `wait_ms` (5000) | Answers a pending `[sudo] password for <user>:` prompt with the password stored in WCM |
+| `ssh_stream_stop` | **`stream_id`** | Sends Ctrl+C, then closes that stream's shell channel |
+| `ssh_upload` | **`server`**, **`local_path`**, **`remote_path`** | SFTP upload. A `remote_path` ending in `/` is treated as a directory |
+| `ssh_download` | **`server`**, **`remote_path`**, **`local_path`** | SFTP download to a `.part` file, then a rename (no half-written files) |
+| `ssh_write_remote_file` | **`server`**, **`remote_path`**, **`content`**, `mode` (octal string, e.g. `"600"`) | Atomic write of text content without shell escaping |
+| `ssh_read_remote_file` | **`server`**, **`remote_path`** | Reads a text file and returns `# <path> (<bytes> bytes)` followed by the content. Binary files and files over `maxReadFileBytes` are refused |
+| `ssh_status` | none | Pooled sessions: alias, host, user, connected, fingerprint, streams |
+| `ssh_disconnect` | `server` (omit to disconnect all) | Closes one session or all of them |
 
-### Connect
-
-```javascript
-// With private key
-ssh_connect({
-  host: "192.168.1.100",
-  username: "user",
-  privateKeyPath: "/path/to/private-key"
-})
-
-// With password
-ssh_connect({
-  host: "192.168.1.100",
-  username: "user",
-  password: "your-password"
-})
-```
-
-### Quick Commands (ssh_exec)
-
-Best for one-off commands that need exit code:
-
-```javascript
-ssh_exec({ command: "ls -la" })
-// Returns: output + [exit code: 0]
-
-ssh_exec({ command: "npm test" })
-// Returns: output + [exit code: 0 or 1]
-```
-
-### Interactive Session (ssh_stream_*)
-
-Best for stateful operations (cd, sudo, environment variables):
-
-```javascript
-// Start shell
-ssh_stream_start({ stream_id: "main", command: "bash" })
-
-// Run commands - output returned immediately!
-ssh_stream_write({ data: "cd /var/www\n" })
-ssh_stream_write({ data: "ls -la\n" })
-
-// Sudo with password prompt
-ssh_stream_write({ data: "sudo apt update\n" })
-// Returns: "[sudo] password for user:" with [complete: true]
-ssh_stream_write({ data: "your-password\n" })
-// Returns: command output
-
-// Cleanup when done
-ssh_stream_stop({ stream_id: "main" })
-```
-
-### File Operations (SFTP)
-
-```javascript
-// Upload local file to remote
-ssh_upload({ local_path: "./app.zip", remote_path: "/home/user/" })
-
-// Download remote file to local
-ssh_download({ remote_path: "/var/log/app.log", local_path: "./app.log" })
-
-// Write content directly to remote file
-ssh_write_remote_file({ remote_path: "/tmp/config.json", content: '{"key": "value"}' })
-
-// Read remote file content
-ssh_read_remote_file({ remote_path: "/etc/nginx/nginx.conf" })
-```
-
-## Auto-Read Feature
-
-`ssh_stream_write` automatically polls for output (every 100ms) and returns when:
-- Shell prompt detected (`$`, `#`, `>`)
-- Password prompt detected (e.g., `[sudo] password for user:`)
-- Timeout reached (default 5 seconds)
-
-```javascript
-// Auto-read enabled (default)
-ssh_stream_write({ data: "ls -la\n" })
-// → Returns output immediately with [complete: true]
-
-// Disable auto-read for long-running commands
-ssh_stream_write({ data: "tail -f /var/log/app.log\n", wait_ms: 0 })
-// → Returns immediately, use ssh_stream_read to get output later
-```
-
-## When to Use Which?
+### Exec vs stream
 
 | Scenario | Tool |
 |----------|------|
-| One-off commands | `ssh_exec` |
-| Need exit code | `ssh_exec` |
-| Sudo commands | `ssh_stream_*` |
-| Change directory | `ssh_stream_*` |
-| Set environment variables | `ssh_stream_*` |
-| Long-running commands | `ssh_stream_*` |
-| File transfer | `ssh_upload` / `ssh_download` |
+| One-off command, need exit code | `ssh_exec` |
+| One-off command as root (non-root user) | `ssh_exec` with `sudo: true` |
+| `cd` / env vars / multi-step state | `ssh_stream_*` |
+| `tail -f`, `pm2 logs`, interactive prompts | `ssh_stream_*` |
+| File transfer / edit | `ssh_upload`, `ssh_download`, `ssh_write_remote_file`, `ssh_read_remote_file` |
+
+### Stream states
+
+Every stream result ends with a footer line:
+
+| Footer | Meaning |
+|--------|---------|
+| `[state: prompt]` | Command finished, and the shell is back at its prompt |
+| `[state: awaiting_input(sudo)]` | Exactly `[sudo] password for <alias user>:` is showing. Call `ssh_sudo_auth` |
+| `[state: awaiting_input(password)]` | Some other password prompt (`ssh`, `su`, `mysql -p`, `Password:`). `ssh_sudo_auth` refuses these |
+| `[state: awaiting_input(confirm)]` | A `(yes/no)`-style prompt. Answer it with `ssh_stream_write` |
+| `[state: timeout]` | `wait_ms` elapsed and the command may still be running. Use `ssh_stream_read` |
+| `[state: running]` | Read only: no prompt yet |
+| `[state: closed]` | The stream channel closed |
+
+If the stream buffer cap dropped bytes, the result also shows `[truncated N bytes]`. If a write found output nobody had read, it reports that output instead of discarding it.
+
+**`sudo -s` / other shells:** a root shell started with `sudo -s` or `su` does not use the marker prompt. The server then falls back to a generic `$`/`#` prompt match after 300 ms of quiet. That works but is slower and less exact. Use `sudo:true` on `ssh_exec` when you can.
+
+## Sudo
+
+Never put a password in any tool argument or command line. There are two supported paths:
+
+1. **`ssh_exec` with `sudo: true`.** The server runs `sudo -S -k -p '<per-call random marker>' -- bash -c '<command>'`. It writes the password only after sudo's own prompt appears. If the host needs no password (NOPASSWD), it writes nothing. Limits:
+   - the command's stdin is EOF, so interactive commands do not work;
+   - refused when the alias user is `root`, and refused together with `pty: true`;
+   - hosts with `Defaults requiretty` reject it; use a stream instead;
+   - `bash` is required on the remote.
+2. **Stream + `ssh_sudo_auth`.** Type the command (`sudo apt update\n`) with `ssh_stream_write`. If the footer shows `awaiting_input(sudo)`, call `ssh_sudo_auth`. sudo caches credentials, so read the footer first: when no prompt appeared, there is nothing to answer.
+
+**Residual risk:** a program running in the stream as the session user can print an exact fake `[sudo] password for <user>:` line. Only call `ssh_sudo_auth` right after a command you typed yourself that starts with `sudo`.
+
+Stream shells start with history disabled, so commands typed through the MCP server are not saved to `~/.bash_history`.
+
+## Local path policy
+
+`local_path` of `ssh_upload` and `ssh_download` is resolved with realpath. On Windows the comparison is case-insensitive. The path must lie under `os.tmpdir()` or a `localPathRoots` entry. The working directory is **not** a default root.
+
+These paths are always denied, even inside a root:
+- the directory of every configured `privateKeyPath`;
+- `~/.ssh` and `~/.claude`;
+- this repo directory;
+- the config file and its `known-hosts.json`;
+- any path with a `.claude` or `.git` segment;
+- any file named `.mcp.json` or `CLAUDE.md`;
+- every `localPathDeny` entry.
+
+Windows alternate data streams (`file:stream`) are rejected.
+
+## Channel budget
+
+By default OpenSSH allows `MaxSessions 10` channels per connection. Per server this tool uses:
+- up to `maxStreams` (4) shell channels;
+- 1 cached SFTP channel;
+- up to `maxConcurrentExec` (4) exec channels. More exec calls wait in a FIFO queue.
+
+That makes 9 ≤ 10. If you raise the limits, raise `MaxSessions` in the server's `sshd_config` as well. The server logs a warning when the configured budget is above 10.
+
+## Troubleshooting
+
+| Error | Fix |
+|-------|-----|
+| `HOST KEY MISMATCH for <alias> ...` | The server key changed. Verify it out of band. If the change is legitimate, delete the entry named in the error (in `known-hosts.json`, or `fingerprint` in config) and reconnect |
+| `ssh-agent not available ...` | Start the OpenSSH agent service and run `ssh-add`, or set `privateKeyPath` and `useAgent: false` |
+| `local path "..." is outside the ...` / `... is denied (<rule>)` | Add the dir to `localPathRoots` in `config.json`, or use a temp dir. Denied paths (key dirs, `.claude`, `.git`, `CLAUDE.md`, ...) cannot be allowed. If a `privateKeyPath` sits directly in your home dir, the whole home dir (incl. the Windows temp dir) is denied, so move keys into their own dir |
+| `[truncated N bytes]` | The output cap was hit. Narrow the command (`head`, `tail`, `grep`, `sed -n`), raise `limits.maxOutputBytes`, or use `ssh_download` |
+| `server MaxSessions reached for <alias>` | Stop an unused stream (`ssh_stream_stop`) or retry. Check `MaxSessions` in the server's `sshd_config` |
+| `max 4 streams for <alias>` | Stop a stream first, or raise `limits.maxStreams` (stay within the channel budget) |
+| `No sudo password in Windows Credential Manager ...` | Run `npm run set-sudo-password -- <remote-username>` |
+
+The server writes its log to `logs/mcp-ssh.log`, rotated at 1 MB and redacted.
+
+## Development
+
+```bash
+npm test                     # unit tests (node --test)
+npm run smoke -- <alias>     # live read-only smoke (writes only under /tmp/mcp-ssh-smoke-*)
+npm run smoke:mcp -- <alias> # spawns the MCP server and drives it over stdio
+```
 
 ## License
 
