@@ -105,7 +105,7 @@ async function readRaw(username) {
 export async function getSudoPassword(username, { alias = '?' } = {}) {
   const pw = await readRaw(username);
   if (!pw) {
-    throw new Error(`No sudo password in the OS credential store (${credentialStoreName()}) for alias ${alias} user '${username}'. Run: npm run set-sudo-password -- ${username}`);
+    throw new Error(`No sudo password in the OS credential store (${credentialStoreName()}) for alias ${alias} user '${username}'. Run: npm run set-sudo-password -- ${username} (npm/npx install: npx -p mcp-ssh-persistent mcp-ssh-persistent-set-sudo-password ${username})`);
   }
   registerSecret(pw);
   return pw;

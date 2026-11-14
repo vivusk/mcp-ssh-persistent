@@ -155,7 +155,7 @@ Never put a password in any tool argument or command line. There are two support
    - `bash` is required on the remote.
 2. **Stream + `ssh_sudo_auth`.** Type the command (`sudo apt update\n`) with `ssh_stream_write`. If the footer shows `awaiting_input(sudo)`, call `ssh_sudo_auth`. sudo caches credentials, so read the footer first: when no prompt appeared, there is nothing to answer.
 
-**Residual risk:** a program running in the stream as the session user can print an exact fake `[sudo] password for <user>:` or `[sudo: authenticate] Password:` line. The sudo-rs prompt names no user; sudo always asks for the invoking (alias) user's password, so this adds no new target. Only call `ssh_sudo_auth` right after a command you typed yourself that starts with `sudo`.
+**Residual risk:** a program running in the stream as the session user can print an exact fake `[sudo] password for <user>:` or `[sudo: authenticate] Password:` line. The sudo-rs prompt names no user, so `ssh_sudo_auth` cannot tell whose password it asks for. After `su <other-user>` or `ssh <other-host>` inside the stream, a sudo-rs prompt there would still receive the alias user's password; do not call `ssh_sudo_auth` in such nested shells. Only call `ssh_sudo_auth` right after a command you typed yourself that starts with `sudo`.
 
 Stream shells start with history disabled, so commands typed through the MCP server are not saved to `~/.bash_history`.
 

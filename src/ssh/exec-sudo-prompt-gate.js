@@ -103,7 +103,7 @@ export class SudoPromptGate {
     // stderr before user code ran; prompts (no trailing newline) become line breaks
     const sudoPart = (at >= 0 ? raw.slice(0, at) : raw).split(this.marker).join('\n');
     if (this.authFailed || (this.written && !this.sentinelSeen && AUTH_FAILED_RE.test(sudoPart))) {
-      throw new Error(`sudo authentication failed on ${alias} (stored password rejected; not retried). Update it: npm run set-sudo-password -- <username>`);
+      throw new Error(`sudo authentication failed on ${alias} (stored password rejected; not retried). Update it: npm run set-sudo-password -- <username> (npm/npx install: npx -p mcp-ssh-persistent mcp-ssh-persistent-set-sudo-password <username>)`);
     }
     const strip = (s) => String(s ?? '').split(this.marker).join('').split(this.sentinel).join('');
     return { ...result, stdout: strip(result.stdout), stderr: strip(raw) };
