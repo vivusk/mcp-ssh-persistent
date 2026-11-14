@@ -40,8 +40,9 @@ test('secrets with quotes/backslashes are masked in jsonResponse and log meta', 
   const text = jsonResponse({ out: `x ${secret} y`, nested: [secret] }).content[0].text;
   assert.equal(text, '{"out":"x *** y","nested":["***"]}');
   log('debug', 'redaction-test', { error: `bad ${secret}`, err: new Error(`boom ${secret}`) });
-  const last = readFileSync(getLogPath(), 'utf8').trim().split('\n').pop();
-  assert.ok(last.includes('redaction-test'));
+  // Other test files log concurrently to the same file: find our line, not the last one.
+  const last = readFileSync(getLogPath(), 'utf8').trim().split('\n').findLast((l) => l.includes('redaction-test'));
+  assert.ok(last);
   assert.ok(!last.includes(JSON.stringify(secret).slice(1, -1)));
   assert.ok(last.includes('bad ***'));
 });

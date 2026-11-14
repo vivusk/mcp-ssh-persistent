@@ -4,10 +4,21 @@
  * injected so handlers are testable with a fake pool.
  */
 import { jsonResponse, textResponse, errorResponse, toolText } from '../utils/response.js';
+import { formatStreamResult } from './format-stream-result.js';
 import { listServerAliases } from '../config/load-config-and-server-aliases.js';
 import { log } from '../utils/logger.js';
 
 const DEFAULT_EXEC_TIMEOUT = 30000;
+const START_WAIT_MS = 2000;
+const WRITE_WAIT_MS = 5000;
+const MAX_WAIT_MS = 600000;
+
+/** Non-negative wait_ms from args (capped at 10 min), else the default. */
+function waitMsArg(args, fallback) {
+  const n = Number(args.wait_ms);
+  return args.wait_ms === undefined || args.wait_ms === null || !Number.isFinite(n) || n < 0
+    ? fallback : Math.min(n, MAX_WAIT_MS);
+}
 
 /**
  * Format an exec result as token-lean text.
@@ -61,42 +72,33 @@ export function createHandlers(pool) {
     async ssh_stream_start(args) {
       const server = requireString(args, 'server');
       const streamId = requireString(args, 'stream_id');
-      const command = requireString(args, 'command');
-      const result = await pool.withSession(server, async (session) => {
-        const res = await session.stream.execStream(streamId, command);
-        pool.registerStream(streamId, session.alias);
-        return { ...res, server: session.alias };
-      });
-      return jsonResponse(result);
+      const command = typeof args.command === 'string' && args.command !== '' ? args.command : null;
+      const { session, stream } = await pool.openStream(server, streamId);
+      const header = [stream.initWarning, `[stream ${streamId} opened on ${session.alias}]`].filter(Boolean).join('\n');
+      if (!command) return textResponse(header);
+      const result = await stream.write(`${command}\n`, { waitMs: waitMsArg(args, START_WAIT_MS) });
+      return formatStreamResult(result, header);
     },
 
     async ssh_stream_read(args) {
       const streamId = requireString(args, 'stream_id');
-      const session = await pool.getStreamSession(streamId);
-      const result = await session.stream.readStream(streamId, args.clear !== false, args.wait_ms || 0);
-      if (result.error) return errorResponse(result.error);
-      return textResponse(result.buffer || '(no new output)');
+      const { stream } = await pool.getStream(streamId);
+      const result = await stream.read({ waitMs: waitMsArg(args, 0), clear: args.clear !== false });
+      return formatStreamResult(result);
     },
 
     async ssh_stream_write(args) {
       const streamId = requireString(args, 'stream_id');
-      const data = requireString(args, 'data').replace(/\\n/g, '\n');
-      const session = await pool.getStreamSession(streamId);
-      const result = await session.stream.writeToShell(data, {
-        wait_ms: args.wait_ms ?? 5000,
-        poll_interval: args.poll_interval ?? 100,
-      });
-      if (result.output) return textResponse(`${result.output}\n---\n[complete: ${result.complete}]`);
-      return jsonResponse(result);
+      if (typeof args.data !== 'string' || args.data === '') throw new Error('"data" is required');
+      const { stream } = await pool.getStream(streamId);
+      // Data is sent verbatim: no escape translation (keeps printf '\n' intact).
+      return formatStreamResult(await stream.write(args.data, { waitMs: waitMsArg(args, WRITE_WAIT_MS) }));
     },
 
     async ssh_stream_stop(args) {
       const streamId = requireString(args, 'stream_id');
-      const session = await pool.getStreamSession(streamId);
-      session.stream.sendCtrlC();
-      const result = session.stream.stopStream(streamId);
-      pool.unregisterStream(streamId);
-      return jsonResponse(result);
+      const alias = await pool.closeStream(streamId);
+      return textResponse(`[stream ${streamId} stopped on ${alias}]`);
     },
 
     async ssh_status() {

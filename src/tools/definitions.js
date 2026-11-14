@@ -45,35 +45,35 @@ export function getToolDefinitions(aliases = safeAliases()) {
     },
     {
       name: 'ssh_stream_start',
-      description: 'Start an interactive/streaming shell command on a server (e.g. tail -f, pm2 logs). The stream_id is bound to that server; later stream calls use stream_id only.',
+      description: 'Open a stateful interactive shell (own channel, history disabled) on a server, bound to stream_id; later stream calls use stream_id only. Optional command runs like ssh_stream_write but waits only 2000 ms by default, so long-running commands (tail -f, pm2 logs) return early with [state: timeout]. stream_id must be unique across servers; max 4 streams per server by default.',
       inputSchema: schema({
         server,
         stream_id: { type: 'string', description: 'Unique ID for this stream' },
-        command: { type: 'string', description: 'Command to run in the shell' },
-      }, ['server', 'stream_id', 'command']),
+        command: { type: 'string', description: 'Optional first command (newline appended)' },
+        wait_ms: { type: 'number', description: 'Max wait for the first command in ms (default 2000)' },
+      }, ['server', 'stream_id']),
     },
     {
       name: 'ssh_stream_read',
-      description: 'Read buffered output of a stream since the last read.',
+      description: 'Read buffered output of a stream since the last read/write. Footer [state: ...] shows prompt / awaiting_input(kind) / running.',
       inputSchema: schema({
         stream_id: { type: 'string', description: 'Stream ID to read from' },
         clear: { type: 'boolean', description: 'Clear buffer after read (default true)' },
-        wait_ms: { type: 'number', description: 'Wait up to N ms for new output (default 0)' },
+        wait_ms: { type: 'number', description: 'Wait up to N ms for new output, returning after 500 ms of quiet (default 0)' },
       }, ['stream_id']),
     },
     {
       name: 'ssh_stream_write',
-      description: 'Write input to the shell of a stream and auto-read output until a prompt is detected or wait_ms elapses.',
+      description: 'Write data verbatim to a stream shell (include a real newline to press Enter) and wait until the command finishes (shell prompt), an input prompt appears, or wait_ms elapses. Footer: [state: prompt | awaiting_input(sudo|password|confirm) | timeout]; timeout means the command may still run (use ssh_stream_read). Unread output from before the write is reported, not silently dropped.',
       inputSchema: schema({
         stream_id: { type: 'string', description: 'Stream ID (selects the server shell)' },
-        data: { type: 'string', description: 'Data to write (add \\n for enter)' },
-        wait_ms: { type: 'number', description: 'Max wait for output in ms (default 5000; 0 = no wait)' },
-        poll_interval: { type: 'number', description: 'Poll interval in ms (default 100)' },
+        data: { type: 'string', description: 'Data to write, sent as-is; end with a newline character to press Enter' },
+        wait_ms: { type: 'number', description: 'Max wait for completion in ms (default 5000; 0 = do not wait)' },
       }, ['stream_id', 'data']),
     },
     {
       name: 'ssh_stream_stop',
-      description: 'Stop a stream (sends Ctrl+C) and clean up.',
+      description: 'Stop one stream: sends Ctrl+C, then closes only the shell channel of that stream.',
       inputSchema: schema({ stream_id: { type: 'string', description: 'Stream ID to stop' } }, ['stream_id']),
     },
     {

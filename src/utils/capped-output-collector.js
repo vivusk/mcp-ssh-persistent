@@ -59,6 +59,15 @@ export class CappedOutputCollector {
    */
   toString() {
     this.end();
+    return this.peek();
+  }
+
+  /**
+   * Current text without ending the collector (an incomplete trailing multibyte
+   * sequence still in the decoder is not included). Used by non-clearing stream reads.
+   * @returns {string}
+   */
+  peek() {
     const tail = this.tail.map((p) => p.s).join('');
     if (this.droppedBytes === 0) return this.head + tail;
     return `${this.head}\n[... truncated ${this.droppedBytes} bytes ...]\n${tail}`;

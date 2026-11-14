@@ -3,13 +3,14 @@
  * Lazy connect on first use, one shared in-flight connect per alias, automatic
  * reconnect on the next call after a drop. Each alias owns its own connection,
  * so a call for one alias can never run on another alias's server.
- * Also keeps the global index stream_id -> alias for stream tools.
+ * Stream ids / shell streams are handled by session-stream-registry.js.
  */
 import { SSHConnection } from './connection.js';
 import { SSHExec } from './exec.js';
-import { SSHStream } from './stream.js';
+import { ShellStream } from './shell-stream.js';
 import { SSHSFTP } from './sftp.js';
 import { mapChannelOpenError } from './channel-open-failure-error.js';
+import { createStreamRegistry } from './session-stream-registry.js';
 import * as configModule from '../config/load-config-and-server-aliases.js';
 import { log } from '../utils/logger.js';
 
@@ -18,17 +19,24 @@ import { log } from '../utils/logger.js';
  * @param {Function} [deps.resolveServer] - alias -> server settings (throws on unknown)
  * @param {Function} [deps.getLimits] - () -> limits
  * @param {Function} [deps.createConnection] - server -> connection-like object
+ * @param {Function} [deps.openShell] - (client, opts) -> Promise<ShellStream>
  */
 export function createSessionPool(deps = {}) {
   const resolveServer = deps.resolveServer || configModule.resolveServer;
   const getLimits = deps.getLimits || configModule.getLimits;
   const createConnection = deps.createConnection || ((server) => new SSHConnection(server));
+  const openShell = deps.openShell || ((client, opts) => ShellStream.open(client, opts));
 
   const sessions = new Map(); // canonical alias -> Session
   const connecting = new Map(); // canonical alias -> Promise<Session>
-  const streamIndex = new Map(); // stream_id -> canonical alias
+  const streams = createStreamRegistry({
+    lookupSession: (alias) => sessions.get(alias),
+    withSession: (alias, fn) => withSession(alias, fn),
+    getLimits,
+    openShell,
+  });
 
-  /** Build a session around a connection (legacy stream/sftp classes until phases 03/05). */
+  /** Build a session around a connection (legacy sftp class until phase 05). */
   function buildSession(server, connection) {
     const limits = getLimits();
     const getClient = () => connection.getClient();
@@ -42,22 +50,18 @@ export function createSessionPool(deps = {}) {
         maxConcurrent: limits.maxConcurrentExec,
         maxOutputBytes: limits.maxOutputBytes,
       }),
-      stream: new SSHStream(getClient, isConnected),
+      streams: new Map(), // stream_id -> ShellStream (null while opening)
       sftp: new SSHSFTP(getClient, isConnected),
     };
-  }
-
-  /** Drop stream index entries owned by an alias. */
-  function forgetStreams(alias) {
-    for (const [id, owner] of streamIndex) if (owner === alias) streamIndex.delete(id);
   }
 
   /** Tear down a session's channels and forget it. */
   function dropSession(session) {
     if (sessions.get(session.alias) !== session) return;
     sessions.delete(session.alias);
-    forgetStreams(session.alias);
-    try { session.stream.cleanup(); } catch { /* ignore */ }
+    streams.forgetAlias(session.alias);
+    for (const stream of session.streams.values()) stream?.close();
+    session.streams.clear();
   }
 
   async function connectSession(server) {
@@ -94,30 +98,6 @@ export function createSessionPool(deps = {}) {
   }
 
   /**
-   * Session owning a stream_id.
-   * @param {string} streamId
-   * @returns {Promise<object>} Session
-   */
-  async function getStreamSession(streamId) {
-    const alias = streamIndex.get(streamId);
-    if (!alias) throw new Error(`unknown stream_id "${streamId}"; start it with ssh_stream_start`);
-    const session = sessions.get(alias);
-    if (!session || !session.connection.isConnected()) {
-      streamIndex.delete(streamId);
-      throw new Error(`stream_id "${streamId}" lost: connection to ${alias} closed`);
-    }
-    return session;
-  }
-
-  /** Bind / unbind a stream_id to a session alias. */
-  function registerStream(streamId, alias) {
-    streamIndex.set(streamId, alias);
-  }
-  function unregisterStream(streamId) {
-    streamIndex.delete(streamId);
-  }
-
-  /**
    * Disconnect one alias (or all when omitted).
    * @param {string} [alias]
    * @returns {string[]} aliases that were disconnected
@@ -141,7 +121,7 @@ export function createSessionPool(deps = {}) {
       user: s.server.username,
       connected: s.connection.isConnected(),
       fingerprint: s.connection.fingerprintInfo?.fingerprint || null,
-      streams: [...streamIndex].filter(([, a]) => a === s.alias).map(([id]) => id),
+      streams: streams.idsFor(s.alias),
     }));
   }
 
@@ -159,5 +139,6 @@ export function createSessionPool(deps = {}) {
     }
   }
 
-  return { getSession, getStreamSession, registerStream, unregisterStream, disconnect, status, withSession };
+  const { forgetAlias, idsFor, ...streamApi } = streams;
+  return { getSession, ...streamApi, disconnect, status, withSession };
 }
