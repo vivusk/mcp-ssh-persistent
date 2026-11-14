@@ -14,7 +14,7 @@ const alias = process.argv[2];
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const EXPECTED_TOOLS = [
   'ssh_exec', 'ssh_stream_start', 'ssh_stream_read', 'ssh_stream_write', 'ssh_stream_stop',
-  'ssh_status', 'ssh_disconnect', 'ssh_upload', 'ssh_download', 'ssh_write_remote_file', 'ssh_read_remote_file',
+  'ssh_sudo_auth', 'ssh_status', 'ssh_disconnect', 'ssh_upload', 'ssh_download', 'ssh_write_remote_file', 'ssh_read_remote_file',
 ];
 
 const child = spawn(process.execPath, [join(ROOT, 'src', 'index.js')], { cwd: ROOT, stdio: ['pipe', 'pipe', 'inherit'] });
@@ -73,6 +73,11 @@ try {
     const res = await request('tools/call', { name: 'ssh_exec', arguments: { server: alias, command: 'echo ok' } });
     const text = res.content?.[0]?.text || '';
     assert(/(^|\n)ok\n/.test(text) && text.includes('[exit: 0]') && !res.isError, `ssh_exec echo ok on ${alias} (${Date.now() - t0} ms)`);
+    // sudo:true on a root alias must fail before any password lookup.
+    const sudo = await request('tools/call', { name: 'ssh_exec', arguments: { server: alias, command: 'id -u', sudo: true } });
+    const sudoText = sudo.content?.[0]?.text || '';
+    if (/already root on/.test(sudoText)) assert(sudo.isError === true, `ssh_exec sudo:true on root alias ${alias} -> "already root" error`);
+    else console.log(`INFO ssh_exec sudo:true on ${alias} (non-root): ${sudo.isError ? 'error' : 'ok'}: ${sudoText.split('\n')[0]}`);
   } else {
     console.log('SKIP ssh_exec call (no alias given)');
   }

@@ -82,9 +82,19 @@ export class ShellStream {
    * @param {object} [opts] - { waitMs = 5000 }
    * @returns {Promise<{output:string, state:string, kind?:string, droppedBytes:number, unreadDiscardedBytes:number}>}
    */
-  write(data, { waitMs = 5000 } = {}) {
+  write(data, opts) {
+    return this.writeChecked(() => data, opts);
+  }
+
+  /**
+   * Like write(), but `prepare(stream)` runs inside the per-stream lock, before the
+   * retained tail / last detection are reset; it returns the data to send or throws
+   * to refuse (nothing sent). Used by ssh_sudo_auth to check the pending prompt.
+   */
+  writeChecked(prepare, { waitMs = 5000 } = {}) {
     return this.#serialize(async () => {
       this.#assertOpen();
+      const data = await prepare(this);
       const unread = this.#take();
       this.tail = '';
       this.lastDetection = null;

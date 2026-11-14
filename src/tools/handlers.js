@@ -7,6 +7,7 @@ import { jsonResponse, textResponse, errorResponse, toolText } from '../utils/re
 import { formatStreamResult } from './format-stream-result.js';
 import { listServerAliases } from '../config/load-config-and-server-aliases.js';
 import { log } from '../utils/logger.js';
+import { getSudoPassword } from '../security/windows-credential-sudo-password.js';
 
 const DEFAULT_EXEC_TIMEOUT = 30000;
 const START_WAIT_MS = 2000;
@@ -56,16 +57,25 @@ function requireString(args, key) {
 
 /**
  * @param {object} pool - Session pool (see src/ssh/session-pool.js)
+ * @param {object} [deps] - { getSudoPassword(username, {alias}) } (injectable for tests)
  * @returns {Function} async handleToolCall(name, args) -> MCP response
  */
-export function createHandlers(pool) {
+export function createHandlers(pool, { getSudoPassword: getPw = getSudoPassword } = {}) {
+  /** Password getter bound to the session's configured user (never a tool argument). */
+  const sudoFor = (session) => ({
+    username: session.server.username,
+    getPassword: () => getPw(session.server.username, { alias: session.alias }),
+  });
+
   const handlers = {
     async ssh_exec(args) {
       const server = requireString(args, 'server');
       const command = requireString(args, 'command');
       const timeout = Number(args.timeout) > 0 ? Number(args.timeout) : DEFAULT_EXEC_TIMEOUT;
       const session = await pool.getSession(server);
-      const result = await session.exec.exec(command, { timeout, pty: args.pty === true });
+      const opts = { timeout, pty: args.pty === true };
+      if (args.sudo === true) opts.sudo = sudoFor(session);
+      const result = await session.exec.exec(command, opts);
       return formatExecResult(result, timeout);
     },
 
@@ -93,6 +103,26 @@ export function createHandlers(pool) {
       const { stream } = await pool.getStream(streamId);
       // Data is sent verbatim: no escape translation (keeps printf '\n' intact).
       return formatStreamResult(await stream.write(args.data, { waitMs: waitMsArg(args, WRITE_WAIT_MS) }));
+    },
+
+    async ssh_sudo_auth(args) {
+      const streamId = requireString(args, 'stream_id');
+      const { session, stream } = await pool.getStream(streamId);
+      const sudo = sudoFor(session);
+      // Checked on the retained tail inside the stream lock: only the exact
+      // `[sudo] password for <session user>:` prompt (kind 'sudo') gets the password.
+      const assertSudoPrompt = (s) => {
+        const det = s.detect();
+        if (det.state !== 'awaiting_input') throw new Error(`no sudo prompt pending on stream ${streamId}; password not sent`);
+        if (det.kind !== 'sudo') throw new Error(`pending prompt is not a sudo prompt for ${sudo.username}; password not sent`);
+      };
+      const result = await stream.writeChecked(async (s) => {
+        assertSudoPrompt(s);
+        const password = await sudo.getPassword();
+        assertSudoPrompt(s); // re-check: output may have arrived during the fetch
+        return `${password}\n`;
+      }, { waitMs: waitMsArg(args, WRITE_WAIT_MS) });
+      return formatStreamResult(result);
     },
 
     async ssh_stream_stop(args) {

@@ -11,7 +11,8 @@
     "start": "node src/index.js",
     "test": "node --test \"test/*.test.js\"",
     "smoke": "node scripts/smoke-test.js",
-    "smoke:mcp": "node scripts/mcp-stdio-smoke.js"
+    "smoke:mcp": "node scripts/mcp-stdio-smoke.js",
+    "set-sudo-password": "node scripts/set-sudo-password.js"
   },
   "keywords": [
     "mcp",
@@ -43,6 +44,7 @@
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@napi-rs/keyring": "^2.1.2",
     "ssh2": "^1.16.0"
   }
 }

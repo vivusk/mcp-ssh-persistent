@@ -2,12 +2,14 @@
  * SSH command execution over exec channels (D6)
  * No PTY by default; stdout/stderr collected separately with a byte cap,
  * UTF-8 safe. Per-session FIFO limiter keeps exec channels within the
- * OpenSSH MaxSessions budget (D12).
+ * OpenSSH MaxSessions budget (D12). `sudo` runs the command through the
+ * prompt-gated sudo wrapper (D13, see exec-sudo-prompt-gate.js).
  */
 import { CappedOutputCollector } from '../utils/capped-output-collector.js';
 import { FifoConcurrencyLimiter } from '../utils/fifo-concurrency-limiter.js';
 import { stripAnsi } from '../utils/ansi.js';
 import { mapChannelOpenError } from './channel-open-failure-error.js';
+import { SudoPromptGate, assertSudoAllowed, buildSudoCommand, createSudoTokens } from './exec-sudo-prompt-gate.js';
 
 const PTY_OPTIONS = { rows: 50, cols: 200, term: 'xterm-256color' };
 // After a timeout, give the channel this long to close before freeing its slot anyway.
@@ -34,23 +36,37 @@ export class SSHExec {
    * Run a command. Queues FIFO when the per-session limit is reached; the
    * timeout starts when the command actually starts running.
    * @param {string} command
-   * @param {object} [opts] - { timeout = 30000, pty = false }
+   * @param {object} [opts] - { timeout = 30000, pty = false, sudo }
+   *   sudo: { username, getPassword() } -> run via sudo; root user / pty rejected before
+   *   the password is fetched. The command's stdin is EOF in sudo mode.
    * @returns {Promise<{stdout:string, stderr:string, exitCode:number|null, signal:string|null, timedOut:boolean}>}
    */
-  async exec(command, { timeout = 30000, pty = false } = {}) {
+  async exec(command, { timeout = 30000, pty = false, sudo = null } = {}) {
     // sshd refuses exec requests containing NUL with an opaque "Unable to exec".
     if (String(command).includes(String.fromCharCode(0))) throw new Error('command contains a NUL character');
+    let gate = null;
+    let remoteCommand = command;
+    if (sudo) {
+      assertSudoAllowed({ username: sudo.username, alias: this.alias, pty });
+      const password = await sudo.getPassword();
+      const tokens = createSudoTokens();
+      gate = new SudoPromptGate({ ...tokens, password });
+      remoteCommand = buildSudoCommand(command, tokens);
+    }
     const release = await this.limiter.acquire();
+    let result;
     try {
-      return await this._run(command, timeout, pty, release);
+      result = await this._run(remoteCommand, timeout, pty, release, gate);
     } catch (err) {
       release();
+      gate?.forget();
       throw err;
     }
+    return gate ? gate.finalize(result, this.alias) : result;
   }
 
   /** Open the channel and collect output; `release` frees the limiter slot once the channel is gone. */
-  _run(command, timeout, pty, release) {
+  _run(command, timeout, pty, release, gate = null) {
     const client = this._getClient();
     if (!client) return Promise.reject(new Error(`not connected to ${this.alias}`));
     const stdout = new CappedOutputCollector(this.maxOutputBytes);
@@ -105,6 +121,7 @@ export class SSHExec {
             kill(ch);
             return;
           }
+          gate?.attach(ch, () => kill(ch));
           ch.on('data', (d) => stdout.push(d));
           ch.stderr?.on('data', (d) => stderr.push(d));
           ch.on('exit', (code, sig) => {

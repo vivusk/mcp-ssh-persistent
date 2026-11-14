@@ -23,6 +23,15 @@ export function registerSecret(str) {
 }
 
 /**
+ * Forget a secret registered for a single call (e.g. a per-call sudo marker),
+ * so the registry stays bounded.
+ * @param {string} str - Secret value
+ */
+export function unregisterSecret(str) {
+  secrets.delete(str);
+}
+
+/**
  * Replace every registered secret and any PEM private key block with `***`.
  * @param {*} text - Text to scrub (non-strings are stringified)
  * @returns {string} Redacted text

@@ -41,6 +41,10 @@ export function getToolDefinitions(aliases = safeAliases()) {
         command: { type: 'string', description: 'Command to execute' },
         timeout: { type: 'number', description: 'Timeout in ms (default 30000)' },
         pty: { type: 'boolean', description: 'Allocate a PTY (default false; stderr is merged into stdout when true)' },
+        sudo: {
+          type: 'boolean',
+          description: 'Run as root via sudo using the password stored in Windows Credential Manager for the server user from config (never pass a password yourself). Runs bash -c on the remote (bash required); command stdin is EOF; not allowed for root users or with pty:true.',
+        },
       }, ['server', 'command']),
     },
     {
@@ -70,6 +74,14 @@ export function getToolDefinitions(aliases = safeAliases()) {
         data: { type: 'string', description: 'Data to write, sent as-is; end with a newline character to press Enter' },
         wait_ms: { type: 'number', description: 'Max wait for completion in ms (default 5000; 0 = do not wait)' },
       }, ['stream_id', 'data']),
+    },
+    {
+      name: 'ssh_sudo_auth',
+      description: 'Answer a pending sudo password prompt in a stream with the password stored in Windows Credential Manager (never pass it yourself). Only acts when the stream shows exactly "[sudo] password for <server user>:" (state awaiting_input(sudo)); other prompts (ssh, su, mysql, Password:) are refused and nothing is sent. Call it right after a command you typed that starts with sudo. Waits like ssh_stream_write.',
+      inputSchema: schema({
+        stream_id: { type: 'string', description: 'Stream ID showing awaiting_input(sudo)' },
+        wait_ms: { type: 'number', description: 'Max wait for completion after sending in ms (default 5000)' },
+      }, ['stream_id']),
     },
     {
       name: 'ssh_stream_stop',
