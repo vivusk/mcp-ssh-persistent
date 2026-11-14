@@ -1,17 +1,16 @@
 /**
  * File logger
- * Appends `ISO level msg json(meta)` lines to <repo>/logs/mcp-ssh.log.
+ * Appends `ISO level msg json(meta)` lines to <config dir>/logs/mcp-ssh.log.
  * Every line passes through secret redaction. Rotates to `.1` above 1 MB.
  * stderr is suppressed by the MCP server, so this file is the only diagnostic channel.
  * Use only on tool boundaries / errors (sync I/O), never per data chunk.
  */
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
+import { getLogDir } from '../config/data-dir-paths.js';
 import { redact } from '../security/secret-redaction.js';
 
-const REPO_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const LOG_DIR = join(REPO_DIR, 'logs');
+const LOG_DIR = getLogDir();
 const LOG_FILE = join(LOG_DIR, 'mcp-ssh.log');
 const MAX_LOG_BYTES = 1024 * 1024;
 

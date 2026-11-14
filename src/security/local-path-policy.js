@@ -83,6 +83,7 @@ export function createLocalPathPolicy(o) {
     { dir: o.repoDir || REPO_DIR, rule: 'mcp-ssh-persistent repo dir' },
     { dir: configPath, rule: 'config file' },
     { dir: o.knownHostsPath || join(dirname(configPath), 'known-hosts.json'), rule: 'known-hosts file' },
+    { dir: join(dirname(configPath), 'logs'), rule: 'mcp-ssh-persistent logs dir' },
     ...(o.deny || []).map((d) => ({ dir: resolve(dirname(configPath), d), rule: `localPathDeny "${d}"` })),
   ].map((d) => ({ ...d, canon: canon(d.dir), literal: norm(d.dir) }));
   const rootList = `allowed roots: [${roots.join(', ')}]`;

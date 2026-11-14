@@ -1,14 +1,13 @@
 /**
  * Config loader + server alias resolution
- * Reads `config.json` (repo root) or the file named by env MCP_SSH_CONFIG once,
+ * Reads the config file (see data-dir-paths.js) once,
  * validates it (no passwords allowed) and exposes alias lookup + limits.
  */
 import { readFileSync } from 'fs';
-import { dirname, join, resolve } from 'path';
-import { fileURLToPath } from 'url';
 import { log } from '../utils/logger.js';
+import { getConfigPath } from './data-dir-paths.js';
 
-const REPO_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+export { getConfigPath };
 
 // Built-in connection defaults; config.defaults and per-server values override them.
 const BUILTIN_DEFAULTS = {
@@ -31,11 +30,6 @@ const OPENSSH_MAX_SESSIONS = 10;
 
 let cached = null;
 let limitsWarned = false;
-
-/** @returns {string} absolute path of the config file in use */
-export function getConfigPath() {
-  return resolve(process.env.MCP_SSH_CONFIG || join(REPO_DIR, 'config.json'));
-}
 
 /** Throw if any object in the config tree carries a `password` key. */
 function rejectPasswords(node, path = 'config') {

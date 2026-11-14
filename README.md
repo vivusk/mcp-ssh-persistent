@@ -25,37 +25,43 @@ MCP server for Claude Code that keeps SSH connections open to named servers and 
 
 ## Setup
 
-1. Clone and install:
-   ```bash
-   git clone https://github.com/Vivusk/mcp-ssh-persistent.git
-   cd mcp-ssh-persistent && npm install
-   ```
-2. Create your config:
-   ```bash
-   cp config.example.json config.json
-   ```
-   Edit `config.json` (it is gitignored):
+### Option A: npm (recommended)
+
+1. Create `~/.mcp-ssh-persistent/config.json` from [config.example.json](config.example.json):
    - add your aliases;
    - set `localPathRoots` to your workspace dir(s). **If you skip this, uploads and downloads outside the OS temp dir are rejected.**
 
-   Set the env var `MCP_SSH_CONFIG` to use a config file somewhere else. `known-hosts.json` is kept next to the config file.
-3. Optional, for sudo: store the sudo password of a remote user in Windows Credential Manager. A hidden prompt asks for the password:
+   `known-hosts.json` and `logs/` are created next to the config file. Set the env var `MCP_SSH_CONFIG` to use a config file somewhere else.
+2. Optional, for sudo: store the sudo password of a remote user in Windows Credential Manager. A hidden prompt asks for the password:
    ```bash
-   npm run set-sudo-password -- <remote-username>
+   npx -p mcp-ssh-persistent mcp-ssh-persistent-set-sudo-password <remote-username>
    ```
    The WCM entry is named `mcp-ssh-persistent:sudo:<remote-username>`. `<remote-username>` is the `username` of the alias.
-4. Register the server with Claude Code, e.g. in a project `.mcp.json`:
+3. Register the server with Claude Code, e.g. in a project `.mcp.json`:
    ```json
    {
      "mcpServers": {
-       "ssh": {
-         "command": "node",
-         "args": ["<path-to>/mcp-ssh-persistent/src/index.js"]
-       }
+       "ssh": { "command": "npx", "args": ["-y", "mcp-ssh-persistent"] }
      }
    }
    ```
    Restart Claude Code. Connect to each alias for the first time from a trusted network, because that first connect pins the host key.
+
+### Option B: git clone
+
+1. Clone and install:
+   ```bash
+   git clone https://github.com/vivusk/mcp-ssh-persistent.git
+   cd mcp-ssh-persistent && npm install
+   cp config.example.json config.json
+   ```
+   Edit `config.json` (gitignored) as in option A. A `config.json` inside the package dir takes precedence over `~/.mcp-ssh-persistent/config.json`.
+2. Optional, for sudo: `npm run set-sudo-password -- <remote-username>`.
+3. Register with `"command": "node", "args": ["<path-to>/mcp-ssh-persistent/src/index.js"]` and restart Claude Code.
+
+### Upgrading from 1.x
+
+2.0 is a breaking release: `ssh_connect` and `ssh_reset_shell` are gone, every tool takes `server: "<alias>"` from the config file, and passwords are no longer accepted in config.
 
 ### config.json
 
@@ -180,7 +186,7 @@ That makes 9 ≤ 10. If you raise the limits, raise `MaxSessions` in the server'
 | `max 4 streams for <alias>` | Stop a stream first, or raise `limits.maxStreams` (stay within the channel budget) |
 | `No sudo password in Windows Credential Manager ...` | Run `npm run set-sudo-password -- <remote-username>` |
 
-The server writes its log to `logs/mcp-ssh.log`, rotated at 1 MB and redacted.
+The server writes its log to `logs/mcp-ssh.log` (beside the config file), rotated at 1 MB and redacted.
 
 ## Development
 
