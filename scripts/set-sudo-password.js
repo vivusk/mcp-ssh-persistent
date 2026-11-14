@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 /**
- * Store / delete the sudo password for a server user in Windows Credential Manager.
+ * Store / delete the sudo password for a server user in the OS credential store
+ * (Windows Credential Manager / macOS Keychain / Linux Secret Service).
  * Usage: npm run set-sudo-password -- <username>            (prompts twice, hidden)
  *        npm run set-sudo-password -- <username> --delete
  * The password is read in raw TTY mode without echo and never printed.
  */
-import { setSudoPassword, deleteSudoPassword, credentialTarget, credentialBackend } from '../src/security/windows-credential-sudo-password.js';
+import {
+  setSudoPassword, deleteSudoPassword, credentialLocation, credentialBackend, credentialStoreName,
+} from '../src/security/sudo-password-store.js';
 
 /**
  * Prompt on the TTY without echo. Enter submits, Backspace edits, Ctrl+C aborts.
@@ -47,10 +50,11 @@ async function main() {
     console.error('Usage: npm run set-sudo-password -- <username> [--delete]');
     process.exit(2);
   }
-  const target = credentialTarget(username); // validates username
+  const location = credentialLocation(username); // validates username
+  const store = credentialStoreName();
   if (del) {
     const removed = await deleteSudoPassword(username);
-    console.log(removed ? `Deleted ${target}` : `Nothing stored at ${target}`);
+    console.log(removed ? `Deleted from ${store}: ${location}` : `Nothing stored in ${store} at ${location}`);
     return;
   }
   const first = await promptHidden(`sudo password for '${username}': `);
@@ -58,7 +62,7 @@ async function main() {
   const second = await promptHidden('repeat: ');
   if (first !== second) throw new Error('passwords do not match; nothing stored');
   await setSudoPassword(username, first);
-  console.log(`Stored in Windows Credential Manager as ${target} (backend: ${credentialBackend()})`);
+  console.log(`Stored in ${store} as ${location} (backend: ${credentialBackend()})`);
 }
 
 main().catch((err) => {

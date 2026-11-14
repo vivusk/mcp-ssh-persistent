@@ -7,7 +7,7 @@ import { jsonResponse, textResponse, errorResponse, toolText } from '../utils/re
 import { formatStreamResult } from './format-stream-result.js';
 import { listServerAliases } from '../config/load-config-and-server-aliases.js';
 import { log } from '../utils/logger.js';
-import { getSudoPassword } from '../security/windows-credential-sudo-password.js';
+import { getSudoPassword } from '../security/sudo-password-store.js';
 import { assertLocalPathAllowed } from '../security/local-path-policy.js';
 import { join, posix } from 'path';
 
