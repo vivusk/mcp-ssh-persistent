@@ -6,7 +6,9 @@
  *  - dirs: every privateKeyPath dir, ~/.ssh, ~/.claude, this repo, `localPathDeny`
  *  - files: the config file in use + its known-hosts.json
  *  - anywhere: a path segment `.claude` / `.git`, a file named `.mcp.json` / `CLAUDE.md`
- * Comparison is case-insensitive with normalised separators on win32.
+ * Deny names (segments + basenames) match case-insensitively on every OS.
+ * Path comparison is Unicode-NFC normalised, and case-insensitive on win32 and
+ * darwin (NTFS / APFS default); the returned real path keeps its original case.
  */
 import { realpathSync } from 'fs';
 import { homedir, tmpdir } from 'os';
@@ -18,12 +20,13 @@ import { getKnownHostsPath } from '../config/known-hosts-fingerprint-store.js';
 const REPO_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WIN = process.platform === 'win32';
 const DENY_SEGMENTS = ['.claude', '.git'];
-const DENY_BASENAMES = WIN ? ['.mcp.json', 'claude.md'] : ['.mcp.json', 'CLAUDE.md'];
+const DENY_BASENAMES = ['.mcp.json', 'claude.md'];
+const CASE_INSENSITIVE = WIN || process.platform === 'darwin';
 
-/** Comparable form: resolved (no trailing sep except a drive root), win32 -> lower case. */
+/** Comparable form: resolved (no trailing sep except a drive root), NFC, lower case on win32/darwin. */
 function norm(p) {
-  const out = resolve(p);
-  return WIN ? out.toLowerCase() : out;
+  const out = resolve(p).normalize('NFC');
+  return CASE_INSENSITIVE ? out.toLowerCase() : out;
 }
 
 /** True when normalised path `p` equals `dir` or lies below it. */
@@ -75,6 +78,7 @@ export function createLocalPathPolicy(o) {
   const configPath = resolve(o.configPath);
   const rootsRaw = [o.tmpDir || tmpdir(), ...(o.roots || []).map((r) => resolve(dirname(configPath), r))];
   const roots = [...new Set(rootsRaw.map(canon))];
+  const displayRoots = [...new Map(rootsRaw.map((r) => [canon(r), r])).values()]; // as configured, for messages
   const home = o.homeDir || homedir();
   const denyDirs = [
     ...(o.keyPaths || []).filter(Boolean).map((k) => ({ dir: dirname(resolve(k)), rule: 'privateKeyPath dir' })),
@@ -86,17 +90,17 @@ export function createLocalPathPolicy(o) {
     { dir: join(dirname(configPath), 'logs'), rule: 'mcp-ssh-persistent logs dir' },
     ...(o.deny || []).map((d) => ({ dir: resolve(dirname(configPath), d), rule: `localPathDeny "${d}"` })),
   ].map((d) => ({ ...d, canon: canon(d.dir), literal: norm(d.dir) }));
-  const rootList = `allowed roots: [${roots.join(', ')}]`;
+  const rootList = `allowed roots: [${displayRoots.join(', ')}]`;
 
   /** First deny rule matching normalised path `p`, or null. */
   function denyRule(p) {
     const hit = denyDirs.find((d) => isUnder(p, d.canon) || isUnder(p, d.literal));
     if (hit) return hit.rule;
-    const parts = p.split(sep); // already lower case on win32 (norm)
-    const seg = parts.find((s) => DENY_SEGMENTS.includes(s));
+    const parts = p.split(sep);
+    const seg = parts.find((s) => DENY_SEGMENTS.includes(s.toLowerCase()));
     if (seg) return `path segment "${seg}"`;
     const base = parts[parts.length - 1];
-    return DENY_BASENAMES.includes(base) ? `file name "${base}"` : null;
+    return DENY_BASENAMES.includes(base.toLowerCase()) ? `file name "${base}"` : null;
   }
 
   /**

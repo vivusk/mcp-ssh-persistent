@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -29,7 +29,7 @@ test('inside root: existing file (upload) and new file (download) allowed', () =
   mkdirSync(dirname(f), { recursive: true });
   writeFileSync(f, 'x');
   const p = policy();
-  assert.equal(p.check(f, { mustExist: true }).toLowerCase(), f.toLowerCase());
+  assert.equal(p.check(f, { mustExist: true }).toLowerCase(), realpathSync.native(f).toLowerCase()); // macOS: /var -> /private/var
   assert.ok(p.check(join(W, 'proj', 'dist', 'new.bin'), { forWrite: true }));
   assert.ok(p.check(join(W, 'proj', 'not-yet', 'deep', 'x'), { forWrite: true }), 'missing parents ok');
   assert.ok(p.check(join(T, 'x.tar.gz'), { forWrite: true }), 'tmpdir is a root');
@@ -90,6 +90,8 @@ test('outside-root error names localPathRoots and the config path', () => {
 
 test('denied error names the rule and allowed roots', () => {
   assert.throws(() => policy().check(join(W, '.mcp.json')), /denied \(file name "\.mcp\.json"\); allowed roots: \[/);
+  const mixed = join(W, 'MixedCaseRoot');
+  assert.throws(() => policy({ roots: [mixed] }).check(join(O, 'x')), (err) => err.message.includes(mixed), 'roots shown as configured, not case-folded');
 });
 
 test('NTFS alternate data stream suffix denied on win32', { skip: process.platform !== 'win32' }, () => {
@@ -107,6 +109,23 @@ test('case-insensitive on win32', { skip: process.platform !== 'win32' }, () => 
   denied(p, join(W, 'Claude.MD'));
   denied(p, join(W, 'SUB', '.Git', 'config'));
   outside(p, join(O.toUpperCase(), 'x'));
+});
+
+test('deny names match case-insensitively on every OS (non-existent tails)', () => {
+  const p = policy();
+  for (const rel of ['proj/claude.md', 'Claude.MD', 'proj/.GIT/config', '.Claude/x.json', '.mcp.JSON']) {
+    denied(p, join(W, rel), { forWrite: true });
+  }
+});
+
+test('non-existent localPathDeny dir matched case-insensitively on darwin', { skip: process.platform !== 'darwin' }, () => {
+  const p = policy({ deny: [join(W, 'secret')] }); // W/secret is never created
+  denied(p, join(W, 'SECRET', 'a.txt'), { forWrite: true });
+});
+
+test('localPathDeny matched after Unicode NFC normalisation (NFD input)', () => {
+  const p = policy({ deny: [join(W, 'café')] }); // NFC, not created
+  denied(p, join(W, 'café', 'a.txt'), { forWrite: true });
 });
 
 test('symlink/junction escape from a root is rejected (realpath)', (t) => {
