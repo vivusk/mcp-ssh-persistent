@@ -8,7 +8,7 @@ MCP server for Claude Code that keeps SSH connections open to named servers and 
 - **Host-key pinning (TOFU).** The first connect pins the server's `SHA256:` fingerprint in `known-hosts.json`. On a mismatch the server refuses to connect. You can also pre-set `fingerprint` per server in config.
 - **No secrets in the LLM context.**
   - Config rejects any `password` key.
-  - Sudo uses a password stored in Windows Credential Manager (WCM). The model never sees or types it.
+  - Sudo uses a password stored in the OS credential store (Windows Credential Manager, macOS Keychain or Linux Secret Service). The model never sees or types it.
   - Logs and responses go through secret redaction.
 - **Exact command completion.** Stream shells use a unique prompt marker, so a write returns as soon as the command finishes. The server also detects input prompts.
 - **Local path policy.** Uploads and downloads only touch allowed directories. Key dirs and agent config are always denied.
@@ -19,8 +19,8 @@ MCP server for Claude Code that keeps SSH connections open to named servers and 
 
 ## Requirements
 
-- Node.js >= 18 (tested on 24).
-- Windows for `sudo` support (Windows Credential Manager). Other tools work on any OS.
+- Node.js >= 18 (tested on 22 and 24; `npm test` needs >= 21).
+- Windows, macOS or Linux. `sudo` support uses the OS credential store; on Linux it needs a running Secret Service daemon (e.g. gnome-keyring or KeePassXC), so headless servers usually lack it. Other tools work on any OS.
 - `bash` on each remote server: `ssh_exec sudo:true` runs `bash -c`, and stream shells assume a bash login shell.
 
 ## Setup
@@ -31,12 +31,15 @@ MCP server for Claude Code that keeps SSH connections open to named servers and 
    - add your aliases;
    - set `localPathRoots` to your workspace dir(s). **If you skip this, uploads and downloads outside the OS temp dir are rejected.**
 
-   `known-hosts.json` and `logs/` are created next to the config file. Set the env var `MCP_SSH_CONFIG` to use a config file somewhere else.
-2. Optional, for sudo: store the sudo password of a remote user in Windows Credential Manager. A hidden prompt asks for the password:
+   `known-hosts.json` and `logs/` are created next to the config file. Set the env var `MCP_SSH_CONFIG` to use a config file somewhere else (a leading `~/` is expanded).
+2. Optional, for sudo: store the sudo password of a remote user in the OS credential store. A hidden prompt asks for the password:
    ```bash
    npx -p mcp-ssh-persistent mcp-ssh-persistent-set-sudo-password <remote-username>
    ```
-   The WCM entry is named `mcp-ssh-persistent:sudo:<remote-username>`. `<remote-username>` is the `username` of the alias.
+   `<remote-username>` is the `username` of the alias. Add `--delete` to remove it. Where it is stored:
+   - Windows: Credential Manager entry `mcp-ssh-persistent:sudo:<remote-username>`.
+   - macOS: generic password in the login keychain, service `mcp-ssh-persistent`, account `sudo:<remote-username>`. Inspect it with `security find-generic-password -s mcp-ssh-persistent -a sudo:<remote-username>`. Passwords with line breaks are rejected.
+   - Linux: Secret Service item, service `mcp-ssh-persistent`, account `sudo:<remote-username>`.
 3. Register the server with Claude Code, e.g. in a project `.mcp.json`:
    ```json
    {
@@ -58,6 +61,11 @@ MCP server for Claude Code that keeps SSH connections open to named servers and 
    Edit `config.json` (gitignored) as in option A. A `config.json` inside the package dir takes precedence over `~/.mcp-ssh-persistent/config.json`.
 2. Optional, for sudo: `npm run set-sudo-password -- <remote-username>`.
 3. Register with `"command": "node", "args": ["<path-to>/mcp-ssh-persistent/src/index.js"]` and restart Claude Code.
+
+### macOS notes
+
+- To use a passphrase-protected key without prompts, set `useAgent: true` and run `ssh-add --apple-use-keychain ~/.ssh/<key>` once to store the passphrase in the Keychain. The agent starts empty after each login, so load the key again with `ssh-add --apple-load-keychain` (or let `ssh` do it via `AddKeysToAgent yes` + `UseKeychain yes` in `~/.ssh/config`). launchd provides `SSH_AUTH_SOCK` to apps started from the GUI.
+- Local path matching is case-insensitive, like the default APFS volume.
 
 ### Upgrading from 1.x
 
@@ -82,10 +90,11 @@ MCP server for Claude Code that keeps SSH connections open to named servers and 
 | Key | Meaning |
 |-----|---------|
 | `defaults` | Values merged into every server: `port` (22), `privateKeyPath`, `useAgent` (false), `keepaliveInterval` (15000), `keepaliveCountMax` (3), `readyTimeout` (10000) |
+| `privateKeyPath` | Accepts `~/`. A relative path resolves against the config dir; an absolute path is used as is. |
 | `servers.<alias>` | `host` and `username` are required. Any key from `defaults`, plus an optional `fingerprint`, which wins over `known-hosts.json`. Aliases are case-insensitive. |
 | `useAgent` | Use ssh-agent. Reads `SSH_AUTH_SOCK`; on Windows the default is the OpenSSH agent pipe. |
-| `localPathRoots` | Extra allowed local roots for upload/download. `os.tmpdir()` is always allowed. Relative paths resolve against the config dir. |
-| `localPathDeny` | Extra denied local paths. A deny rule always wins over a root. |
+| `localPathRoots` | Extra allowed local roots for upload/download. `os.tmpdir()` is always allowed. Accepts `~/`; relative paths resolve against the config dir. |
+| `localPathDeny` | Extra denied local paths. A deny rule always wins over a root. Accepts `~/`; relative paths resolve against the config dir. |
 | `limits` | Output caps and channel budget (see below) |
 
 ## Tools
@@ -98,7 +107,7 @@ All tools return plain text. **bold** marks required params.
 | `ssh_stream_start` | **`server`**, **`stream_id`**, `command`, `wait_ms` (2000) | Opens a stateful shell (history disabled) bound to `stream_id`. `stream_id` must be unique across servers |
 | `ssh_stream_write` | **`stream_id`**, **`data`**, `wait_ms` (5000; 0 = no wait) | Writes `data` verbatim (end it with a newline to press Enter), then waits for the prompt, an input prompt or the timeout |
 | `ssh_stream_read` | **`stream_id`**, `clear` (true), `wait_ms` (0) | Reads buffered output since the last read or write |
-| `ssh_sudo_auth` | **`stream_id`**, `wait_ms` (5000) | Answers a pending `[sudo] password for <user>:` prompt with the password stored in WCM |
+| `ssh_sudo_auth` | **`stream_id`**, `wait_ms` (5000) | Answers a pending `[sudo] password for <user>:` prompt with the password from the OS credential store |
 | `ssh_stream_stop` | **`stream_id`** | Sends Ctrl+C, then closes that stream's shell channel |
 | `ssh_upload` | **`server`**, **`local_path`**, **`remote_path`** | SFTP upload. A `remote_path` ending in `/` is treated as a directory |
 | `ssh_download` | **`server`**, **`remote_path`**, **`local_path`** | SFTP download to a `.part` file, then a rename (no half-written files) |
@@ -152,7 +161,7 @@ Stream shells start with history disabled, so commands typed through the MCP ser
 
 ## Local path policy
 
-`local_path` of `ssh_upload` and `ssh_download` is resolved with realpath. On Windows the comparison is case-insensitive. The path must lie under `os.tmpdir()` or a `localPathRoots` entry. The working directory is **not** a default root.
+`local_path` of `ssh_upload` and `ssh_download` is resolved with realpath. Path comparison is case-insensitive on macOS and Windows (case-sensitive on Linux); the deny names below (`.claude`, `.git`, `.mcp.json`, `CLAUDE.md`) match in any case on every OS. The path must lie under `os.tmpdir()` or a `localPathRoots` entry. The working directory is **not** a default root.
 
 These paths are always denied, even inside a root:
 - the directory of every configured `privateKeyPath`;
@@ -179,12 +188,14 @@ That makes 9 ≤ 10. If you raise the limits, raise `MaxSessions` in the server'
 | Error | Fix |
 |-------|-----|
 | `HOST KEY MISMATCH for <alias> ...` | The server key changed. Verify it out of band. If the change is legitimate, delete the entry named in the error (in `known-hosts.json`, or `fingerprint` in config) and reconnect |
-| `ssh-agent not available ...` | Start the OpenSSH agent service and run `ssh-add`, or set `privateKeyPath` and `useAgent: false` |
+| `ssh-agent not available ...` | Windows: start the OpenSSH agent service and run `ssh-add`. macOS: run `ssh-add --apple-load-keychain` after each login, or `ssh-add --apple-use-keychain <key>` the first time (launchd sets `SSH_AUTH_SOCK`). Linux: start `ssh-agent` in the session that launches Claude Code and run `ssh-add`. Or set `privateKeyPath` and `useAgent: false` |
 | `local path "..." is outside the ...` / `... is denied (<rule>)` | Add the dir to `localPathRoots` in `config.json`, or use a temp dir. Denied paths (key dirs, `.claude`, `.git`, `CLAUDE.md`, ...) cannot be allowed. If a `privateKeyPath` sits directly in your home dir, the whole home dir (incl. the Windows temp dir) is denied, so move keys into their own dir |
 | `[truncated N bytes]` | The output cap was hit. Narrow the command (`head`, `tail`, `grep`, `sed -n`), raise `limits.maxOutputBytes`, or use `ssh_download` |
 | `server MaxSessions reached for <alias>` | Stop an unused stream (`ssh_stream_stop`) or retry. Check `MaxSessions` in the server's `sshd_config` |
 | `max 4 streams for <alias>` | Stop a stream first, or raise `limits.maxStreams` (stay within the channel budget) |
-| `No sudo password in Windows Credential Manager ...` | Run `npm run set-sudo-password -- <remote-username>` |
+| `No sudo password in the OS credential store (...) ...` | Run `npm run set-sudo-password -- <remote-username>` (or the `npx` command from Setup) |
+| `macOS Keychain ... (unlock the login keychain)` | Unlock it (`security unlock-keychain`) or log in to the Mac's GUI session, then retry |
+| `Secret Service ... failed ...` | Linux: install and unlock a Secret Service keyring (gnome-keyring or KeePassXC). If the message says `@napi-rs/keyring failed to load`, reinstall dependencies (`npm ci`) on a supported architecture |
 
 The server writes its log to `logs/mcp-ssh.log` (beside the config file), rotated at 1 MB and redacted.
 
@@ -195,6 +206,16 @@ npm test                     # unit tests (node --test)
 npm run smoke -- <alias>     # live read-only smoke (writes only under /tmp/mcp-ssh-smoke-*)
 npm run smoke:mcp -- <alias> # spawns the MCP server and drives it over stdio
 ```
+
+Environment variables:
+
+| Variable | Meaning |
+|----------|---------|
+| `MCP_SSH_CONFIG` | Path of the config file (leading `~/` expanded) |
+| `MCP_SSH_CRED_BACKEND` | Windows only: `powershell` forces the PowerShell Credential Manager backend instead of `@napi-rs/keyring`. The old name `MCP_SSH_WCM_BACKEND` is still accepted; the new name wins if both are set |
+| `MCP_SSH_TEST_KEYCHAIN` | Tests only: `1` enables round-trip tests that write a throwaway `__mcp_test__` item to the real macOS login keychain / Linux Secret Service. Off by default |
+
+CI (`.github/workflows/test.yml`) runs `npm test` on Ubuntu, macOS and Windows with Node 22 and 24; the macOS job sets `MCP_SSH_TEST_KEYCHAIN=1`.
 
 ## License
 
