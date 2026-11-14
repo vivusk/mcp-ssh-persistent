@@ -15,6 +15,14 @@ test('sudo prompt for the session user -> kind sudo', () => {
   assert.deepEqual(detect('blah\r\n[sudo] password for deploy:', 0, user), { state: 'awaiting_input', kind: 'sudo' });
 });
 
+test('sudo-rs prompt "[sudo: authenticate] Password:" -> kind sudo; variants -> password', () => {
+  assert.deepEqual(detect('[sudo: authenticate] Password: ', 0, user), { state: 'awaiting_input', kind: 'sudo' });
+  assert.deepEqual(detect('x\r\n[sudo: authenticate] Password:', 0, user), { state: 'awaiting_input', kind: 'sudo' });
+  assert.equal(detect('fake [sudo: authenticate] Password: ', 0, user).kind, 'password');
+  assert.equal(detect('[sudo: other] Password: ', 0, user).kind, 'password');
+  assert.equal(detect('[sudo: authenticate] Password: ', 0, {}).kind, 'password', 'no session user -> never sudo');
+});
+
 test('sudo prompt for another user -> kind password, not sudo', () => {
   assert.deepEqual(detect('[sudo] password for otheruser: ', 0, user), { state: 'awaiting_input', kind: 'password' });
   assert.deepEqual(detect('[sudo] password for deployx: ', 0, user), { state: 'awaiting_input', kind: 'password' });

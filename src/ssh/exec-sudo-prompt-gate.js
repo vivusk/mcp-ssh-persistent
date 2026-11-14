@@ -20,7 +20,10 @@ import { registerSecret, unregisterSecret } from '../security/secret-redaction.j
 
 export const NO_MARKER_QUIET_MS = 3000;
 // sudo's own failure lines only (not arbitrary command stderr).
-const AUTH_FAILED_RE = /^(Sorry, try again\.?|sudo: \d+ incorrect password attempts?)\s*$/im;
+const AUTH_FAILED_RE = /^(Sorry, try again\.?|sudo: \d+ incorrect password attempts?|sudo: Authentication failed, try again\.?)\s*$/im;
+
+/** sudo-rs wraps `-p` as `[sudo: <prompt>] Password: `; collapse the wrapper back to the bare marker. */
+const unwrapSudoRsPrompt = (s, marker) => s.split(`[sudo: ${marker}] Password: `).join(marker).split(`[sudo: ${marker}] Password:`).join(marker);
 
 const token = (kind) => `__MCP_SUDO_${kind}${randomBytes(12).toString('hex')}__`;
 
@@ -95,7 +98,7 @@ export class SudoPromptGate {
    */
   finalize(result, alias) {
     this.forget();
-    const raw = String(result.stderr ?? '');
+    const raw = unwrapSudoRsPrompt(String(result.stderr ?? ''), this.marker);
     const at = raw.indexOf(this.sentinel);
     // stderr before user code ran; prompts (no trailing newline) become line breaks
     const sudoPart = (at >= 0 ? raw.slice(0, at) : raw).split(this.marker).join('\n');

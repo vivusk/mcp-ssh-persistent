@@ -1,7 +1,8 @@
 /**
  * Shell completion detector (D7, D13) — pure functions, no I/O.
  * Classifies the tail of a shell stream's output as: our marker prompt
- * (command finished), a sudo prompt for the session user, another password
+ * (command finished), a sudo prompt for the session user (classic sudo or
+ * sudo-rs `[sudo: authenticate] Password:`), another password
  * prompt, a yes/no confirmation, a generic `$`/`#` prompt after 300 ms of
  * quiet (e.g. root shell from `sudo -s`), or still running.
  */
@@ -19,6 +20,8 @@ const MARKER_STRIP_RE = new RegExp(`${MARKER}[$#] ?(\\r?\\n)?`, 'g');
 const PASSWORD_RE = /(^|\n)[^\n]*[Pp]assword(?: for [^\n:]+)?:\s*$/;
 const CONFIRM_RE = /\((yes\/no|y\/n)[^)]*\)\??\s*:?\s*$/i;
 const FALLBACK_PROMPT_RE = /[$#]\s*$/;
+// sudo-rs (default sudo on Ubuntu 25.10+) prompt; it names no user and always asks for the invoking user's password.
+const SUDO_RS_PROMPT_RE = /^\[sudo: authenticate\] Password:\s*$/;
 
 /** Escape a string for literal use inside a RegExp. */
 const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -43,7 +46,7 @@ export function detect(tailText, quietMs = 0, { username } = {}) {
   const line = lastLine(text);
   if (username) {
     const sudoRe = new RegExp(`^\\[sudo\\] password for ${escapeRegExp(username)}:\\s*$`);
-    if (sudoRe.test(line)) return { state: 'awaiting_input', kind: 'sudo' };
+    if (sudoRe.test(line) || SUDO_RS_PROMPT_RE.test(line)) return { state: 'awaiting_input', kind: 'sudo' };
   }
   if (PASSWORD_RE.test(line)) return { state: 'awaiting_input', kind: 'password' };
   if (CONFIRM_RE.test(line)) return { state: 'awaiting_input', kind: 'confirm' };

@@ -77,7 +77,7 @@ export function getToolDefinitions(aliases = safeAliases()) {
     },
     {
       name: 'ssh_sudo_auth',
-      description: 'Answer a pending sudo password prompt in a stream with the password stored in the OS credential store (Windows Credential Manager / macOS Keychain / Linux Secret Service); never pass it yourself. Only acts when the stream shows exactly "[sudo] password for <server user>:" (state awaiting_input(sudo)); other prompts (ssh, su, mysql, Password:) are refused and nothing is sent. Call it right after a command you typed that starts with sudo. Waits like ssh_stream_write.',
+      description: 'Answer a pending sudo password prompt in a stream with the password stored in the OS credential store (Windows Credential Manager / macOS Keychain / Linux Secret Service); never pass it yourself. Only acts when the stream shows exactly "[sudo] password for <server user>:" or the sudo-rs prompt "[sudo: authenticate] Password:" (state awaiting_input(sudo)); other prompts (ssh, su, mysql, Password:) are refused and nothing is sent. Call it right after a command you typed that starts with sudo. Waits like ssh_stream_write.',
       inputSchema: schema({
         stream_id: { type: 'string', description: 'Stream ID showing awaiting_input(sudo)' },
         wait_ms: { type: 'number', description: 'Max wait for completion after sending in ms (default 5000)' },

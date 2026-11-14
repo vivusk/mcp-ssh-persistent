@@ -67,6 +67,32 @@ test('(a) marker split over 2 chunks -> password once, then end(); marker not in
   assert.equal(t.fetched(), 1);
 });
 
+test('(a2) sudo-rs wrapped prompt "[sudo: <marker>] Password: " -> password once; wrapper not in stderr', async () => {
+  const t = setup();
+  const { p } = await start(t);
+  const { ch } = t.state;
+  ch.stderr.emit('data', Buffer.from(`[sudo: ${markerOf(t.state.command)}] Password: `));
+  assert.deepEqual(ch.stdin.writes, [`${PW}\n`]);
+  ch.emit('data', Buffer.from('root\n'));
+  exitWith(ch);
+  const r = await p;
+  assert.equal(r.stdout, 'root\n');
+  assert.equal(r.stderr, '');
+});
+
+test('(d2) sudo-rs wrong password (second wrapped prompt) -> auth failed, channel killed', async () => {
+  const t = setup();
+  const { p } = await start(t);
+  await tick();
+  const { ch } = t.state;
+  const wrapped = `[sudo: ${markerOf(t.state.command)}] Password: `;
+  ch.stderr.emit('data', Buffer.from(wrapped));
+  ch.stderr.emit('data', Buffer.from(`\nsudo: Authentication failed, try again.\n${wrapped}`));
+  assert.deepEqual(ch.stdin.writes, [`${PW}\n`]);
+  assert.equal(ch.closed, true, 'channel killed');
+  await assert.rejects(p, /sudo authentication failed on RR/);
+});
+
 test('(b) stdout before any marker -> nothing written, end() called', async () => {
   const t = setup();
   const { p } = await start(t);

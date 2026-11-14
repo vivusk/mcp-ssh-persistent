@@ -107,7 +107,7 @@ All tools return plain text. **bold** marks required params.
 | `ssh_stream_start` | **`server`**, **`stream_id`**, `command`, `wait_ms` (2000) | Opens a stateful shell (history disabled) bound to `stream_id`. `stream_id` must be unique across servers |
 | `ssh_stream_write` | **`stream_id`**, **`data`**, `wait_ms` (5000; 0 = no wait) | Writes `data` verbatim (end it with a newline to press Enter), then waits for the prompt, an input prompt or the timeout |
 | `ssh_stream_read` | **`stream_id`**, `clear` (true), `wait_ms` (0) | Reads buffered output since the last read or write |
-| `ssh_sudo_auth` | **`stream_id`**, `wait_ms` (5000) | Answers a pending `[sudo] password for <user>:` prompt with the password from the OS credential store |
+| `ssh_sudo_auth` | **`stream_id`**, `wait_ms` (5000) | Answers a pending `[sudo] password for <user>:` (or sudo-rs `[sudo: authenticate] Password:`) prompt with the password from the OS credential store |
 | `ssh_stream_stop` | **`stream_id`** | Sends Ctrl+C, then closes that stream's shell channel |
 | `ssh_upload` | **`server`**, **`local_path`**, **`remote_path`** | SFTP upload. A `remote_path` ending in `/` is treated as a directory |
 | `ssh_download` | **`server`**, **`remote_path`**, **`local_path`** | SFTP download to a `.part` file, then a rename (no half-written files) |
@@ -133,7 +133,7 @@ Every stream result ends with a footer line:
 | Footer | Meaning |
 |--------|---------|
 | `[state: prompt]` | Command finished, and the shell is back at its prompt |
-| `[state: awaiting_input(sudo)]` | Exactly `[sudo] password for <alias user>:` is showing. Call `ssh_sudo_auth` |
+| `[state: awaiting_input(sudo)]` | Exactly `[sudo] password for <alias user>:` or the sudo-rs prompt `[sudo: authenticate] Password:` (Ubuntu 25.10+ default) is showing. Call `ssh_sudo_auth` |
 | `[state: awaiting_input(password)]` | Some other password prompt (`ssh`, `su`, `mysql -p`, `Password:`). `ssh_sudo_auth` refuses these |
 | `[state: awaiting_input(confirm)]` | A `(yes/no)`-style prompt. Answer it with `ssh_stream_write` |
 | `[state: timeout]` | `wait_ms` elapsed and the command may still be running. Use `ssh_stream_read` |
@@ -155,7 +155,7 @@ Never put a password in any tool argument or command line. There are two support
    - `bash` is required on the remote.
 2. **Stream + `ssh_sudo_auth`.** Type the command (`sudo apt update\n`) with `ssh_stream_write`. If the footer shows `awaiting_input(sudo)`, call `ssh_sudo_auth`. sudo caches credentials, so read the footer first: when no prompt appeared, there is nothing to answer.
 
-**Residual risk:** a program running in the stream as the session user can print an exact fake `[sudo] password for <user>:` line. Only call `ssh_sudo_auth` right after a command you typed yourself that starts with `sudo`.
+**Residual risk:** a program running in the stream as the session user can print an exact fake `[sudo] password for <user>:` or `[sudo: authenticate] Password:` line. The sudo-rs prompt names no user; sudo always asks for the invoking (alias) user's password, so this adds no new target. Only call `ssh_sudo_auth` right after a command you typed yourself that starts with `sudo`.
 
 Stream shells start with history disabled, so commands typed through the MCP server are not saved to `~/.bash_history`.
 
