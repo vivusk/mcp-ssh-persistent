@@ -9,7 +9,9 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test"
+    "test": "node --test \"test/*.test.js\"",
+    "smoke": "node scripts/smoke-test.js",
+    "smoke:mcp": "node scripts/mcp-stdio-smoke.js"
   },
   "keywords": [
     "mcp",

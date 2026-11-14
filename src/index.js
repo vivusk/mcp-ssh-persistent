@@ -6,28 +6,16 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { readFileSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
 
-import { TOOLS } from './tools/definitions.js';
-import { handleToolCall } from './tools/handlers.js';
+import { getToolDefinitions } from './tools/definitions.js';
+import { createHandlers } from './tools/handlers.js';
+import { createSessionPool } from './ssh/session-pool.js';
 import { errorResponse } from './utils/response.js';
 import { log } from './utils/logger.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// ─────────────────────────────────────────────────────────────
-// Configuration (legacy flat config for current handlers; phase 02 switches
-// handlers to src/config/load-config-and-server-aliases.js)
-// ─────────────────────────────────────────────────────────────
-
-let config = {};
-try {
-  config = JSON.parse(readFileSync(join(__dirname, '..', 'config.json'), 'utf8'));
-} catch {
-  // Use defaults if config not found
-}
+// One pool for the process: alias -> lazily connected session (config.json servers).
+const pool = createSessionPool();
+const handleToolCall = createHandlers(pool);
 
 // ─────────────────────────────────────────────────────────────
 // Process handling (D9)
@@ -41,6 +29,7 @@ const gracefulExit = (reason) => {
   if (exiting) return;
   exiting = true;
   log('info', `shutdown: ${reason}`);
+  try { pool.disconnect(); } catch {}
   try { process.exit(0); } catch {}
 };
 
@@ -66,12 +55,13 @@ const server = new Server(
   { capabilities: { tools: {} } }
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+// Built per request so the `server` param lists the aliases currently in config.
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: getToolDefinitions() }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   try {
-    return await handleToolCall(name, args, config);
+    return await handleToolCall(name, args);
   } catch (error) {
     const message = error?.message || String(error);
     log('error', `tool ${name} failed`, { error: message });

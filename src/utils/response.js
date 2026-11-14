@@ -45,18 +45,3 @@ export function textResponse(text) {
 export function errorResponse(message) {
   return toolText(`Error: ${message}`, true);
 }
-
-/**
- * Create exec result response with exit code info
- * @param {object} result - Exec result { output, exitCode, timedOut }
- * @param {number} timeout - Timeout value used
- * @returns {object} MCP response object
- */
-export function execResponse(result, timeout) {
-  let text = result.output;
-  if (result.timedOut) {
-    text += `\n[timed out after ${timeout}ms]`;
-  }
-  text += `\n[exit code: ${result.exitCode}]`;
-  return toolText(text, result.exitCode !== 0);
-}

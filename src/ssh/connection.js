@@ -1,133 +1,165 @@
 /**
- * SSH Connection Management
- * Handles establishing and managing SSH client connections
+ * SSH connection wrapper (one ssh2 Client per server alias)
+ * Hardened: host-key pinning via hostVerifier (D4), keepalive (D5),
+ * key or ssh-agent auth only (no passwords).
  */
 import { Client } from 'ssh2';
 import { readFileSync } from 'fs';
+import { verify as verifyHostKey, getKnownHostsPath } from '../config/known-hosts-fingerprint-store.js';
+import { log } from '../utils/logger.js';
+
+const WIN_AGENT_PIPE = '\\\\.\\pipe\\openssh-ssh-agent';
 
 /**
- * Create and manage SSH connection
+ * Build ssh2 auth options for a server (agent or private key).
+ * @param {object} server - Resolved server settings
+ * @returns {object} partial ssh2 connect options
  */
+function buildAuthOptions(server) {
+  if (server.useAgent) {
+    const agent = process.env.SSH_AUTH_SOCK || (process.platform === 'win32' ? WIN_AGENT_PIPE : '');
+    if (!agent) throw new Error(`ssh-agent not available for ${server.alias} (SSH_AUTH_SOCK unset)`);
+    return { agent };
+  }
+  if (!server.privateKeyPath) {
+    throw new Error(`server alias "${server.alias}" has no privateKeyPath and useAgent is false`);
+  }
+  let privateKey;
+  try {
+    privateKey = readFileSync(server.privateKeyPath);
+  } catch (err) {
+    throw new Error(`cannot read privateKeyPath for ${server.alias}: ${err.code || err.message}`);
+  }
+  const opts = { privateKey };
+  if (process.env.MCP_SSH_KEY_PASSPHRASE) opts.passphrase = process.env.MCP_SSH_KEY_PASSPHRASE;
+  return opts;
+}
+
 export class SSHConnection {
-  constructor() {
+  /**
+   * @param {object} server - Resolved server settings (alias, host, port, username, ...)
+   * @param {object} [deps] - { verifyHostKey } override for tests
+   */
+  constructor(server, deps = {}) {
+    this.server = server;
     this.client = null;
     this.connected = false;
-    this.config = null;
-    this._onClose = null; // Callback for connection close
+    this.fingerprintInfo = null; // { fingerprint, isNew, source } after host-key check
+    this._closeHandlers = [];
+    this._verify = deps.verifyHostKey || verifyHostKey;
   }
 
-  /**
-   * Set callback for connection close event
-   * @param {Function} callback - Called when connection closes
-   */
+  /** Register a callback fired once the underlying connection closes. */
   onClose(callback) {
-    this._onClose = callback;
+    this._closeHandlers.push(callback);
   }
 
   /**
-   * Connect to SSH server
-   * @param {object} config - Connection config { host, port, username, privateKeyPath, password }
-   * @returns {Promise<object>} Connection result
+   * Open the connection. Rejects on host-key mismatch, auth failure, timeout.
+   * @returns {Promise<void>}
    */
-  async connect(config) {
-    if (this.connected) {
-      return { success: true, message: 'Already connected' };
-    }
-
-    this.config = config;
+  connect() {
+    const server = this.server;
+    const port = server.port || 22;
+    const options = {
+      host: server.host,
+      port,
+      username: server.username,
+      readyTimeout: server.readyTimeout,
+      keepaliveInterval: server.keepaliveInterval,
+      keepaliveCountMax: server.keepaliveCountMax,
+      ...buildAuthOptions(server),
+    };
+    let hostError = null;
+    options.hostVerifier = (key) => {
+      try {
+        const res = this._verify(server.host, port, key, server.fingerprint);
+        this.fingerprintInfo = { fingerprint: res.fingerprint, isNew: res.isNew, source: res.source };
+        if (res.ok) {
+          if (res.isNew) log('info', `pinned new host key for ${server.alias}`, { fingerprint: res.fingerprint });
+          return true;
+        }
+        const where = res.source === 'config' ? 'the fingerprint in config.json' : `that entry in ${getKnownHostsPath()}`;
+        hostError = new Error(
+          `HOST KEY MISMATCH for ${server.alias} (${server.host}:${port}) expected ${res.expected} got ${res.fingerprint}` +
+          ` — if the server was legitimately reinstalled, delete ${where}`
+        );
+      } catch (err) {
+        hostError = new Error(`host key check failed for ${server.alias}: ${err.message}`);
+      }
+      return false;
+    };
 
     return new Promise((resolve, reject) => {
-      this.client = new Client();
-
-      let resolved = false;
-
-      this.client.on('ready', () => {
-        resolved = true;
+      const client = new Client();
+      this.client = client;
+      this._closeFired = false;
+      let settled = false;
+      client.on('ready', () => {
+        settled = true;
         this.connected = true;
-        resolve({ success: true, message: `Connected to ${config.host}` });
+        resolve();
       });
-
-      this.client.on('error', (err) => {
+      client.on('error', (err) => {
         this.connected = false;
-        if (!resolved) {
-          reject(err);
+        if (settled) {
+          log('warn', `ssh connection error on ${server.alias}`, { error: err.message });
+          return;
         }
-        // Silently ignore errors after connection (e.g., during shutdown)
+        settled = true;
+        reject(hostError || this._describeError(err));
       });
-
-      this.client.on('close', () => {
+      client.on('close', () => {
+        const wasClient = this.client === client;
         this.connected = false;
-        if (this._onClose) this._onClose();
+        if (!settled) {
+          settled = true;
+          reject(hostError || new Error(`connection to ${server.alias} closed during handshake`));
+        }
+        if (wasClient) this._fireClose();
       });
-
-      this.client.on('end', () => {
-        this.connected = false;
-      });
-
-      // Build connection options
-      const connectOptions = {
-        host: config.host,
-        port: config.port || 22,
-        username: config.username,
-        readyTimeout: 10000,
-      };
-
-      // Use private key if provided
-      if (config.privateKeyPath) {
-        connectOptions.privateKey = readFileSync(config.privateKeyPath);
-      } else if (config.password) {
-        connectOptions.password = config.password;
+      try {
+        client.connect(options);
+      } catch (err) {
+        settled = true;
+        reject(this._describeError(err));
       }
-
-      this.client.connect(connectOptions);
     });
   }
 
-  /**
-   * Disconnect from SSH server
-   * @returns {object} Disconnect result
-   */
-  disconnect() {
-    if (this.client) {
-      try {
-        this.client.end();
-      } catch {
-        // Ignore end errors
-      }
-      try {
-        this.client.destroy();
-      } catch {
-        // Ignore destroy errors
-      }
-      this.client = null;
-      this.connected = false;
+  /** Map low-level ssh2 errors to actionable messages. */
+  _describeError(err) {
+    const msg = err?.message || String(err);
+    if (this.server.useAgent && /agent|ENOENT|EPIPE|connect/i.test(msg) && !/Timed out/i.test(msg)) {
+      return new Error(`ssh-agent not available or failed for ${this.server.alias}: ${msg}`);
     }
-    return { success: true };
+    return new Error(`connect ${this.server.alias} failed: ${msg}`);
   }
 
-  /**
-   * Get connection status
-   * @returns {object} Status info
-   */
-  getStatus() {
-    return {
-      connected: this.connected,
-      host: this.config?.host,
-    };
+  /** Close the connection (idempotent). */
+  disconnect() {
+    const client = this.client;
+    if (!client) return;
+    this.connected = false;
+    this.client = null; // cleared first so the late 'close' event is ignored
+    try { client.end(); } catch { /* ignore */ }
+    try { client.destroy(); } catch { /* ignore */ }
+    this._fireClose();
   }
 
-  /**
-   * Get underlying SSH2 client for other modules
-   * @returns {Client|null} SSH2 client instance
-   */
+  /** Run close callbacks once per connection lifetime. */
+  _fireClose() {
+    if (this._closeFired) return;
+    this._closeFired = true;
+    this._closeHandlers.forEach((cb) => { try { cb(); } catch { /* ignore */ } });
+  }
+
+  /** @returns {Client|null} underlying ssh2 client */
   getClient() {
     return this.client;
   }
 
-  /**
-   * Check if connected
-   * @returns {boolean} Connection state
-   */
+  /** @returns {boolean} true while the connection is usable */
   isConnected() {
     return this.connected && this.client !== null;
   }
