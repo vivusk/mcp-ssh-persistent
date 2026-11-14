@@ -1,17 +1,31 @@
 /**
  * MCP response formatting utilities
- * Standardizes response structure for tool handlers
+ * Standardizes response structure for tool handlers.
+ * Every text leaving the server passes through secret redaction.
  */
+import { redact } from '../security/secret-redaction.js';
 
 /**
- * Create success response with JSON content
+ * Plain-text tool response (preferred: no JSON escaping, token-lean).
+ * @param {string} text - Text content
+ * @param {boolean} [isError=false] - Mark as tool error
+ * @returns {object} MCP response object
+ */
+export function toolText(text, isError = false) {
+  const response = { content: [{ type: 'text', text: redact(text) }] };
+  if (isError) response.isError = true;
+  return response;
+}
+
+/**
+ * Compact JSON response for small status objects (no pretty-print).
+ * String leaves are redacted BEFORE serialization: JSON escaping (`"` -> `\"`)
+ * would otherwise stop secrets containing quotes/backslashes from matching.
  * @param {object} data - Data to serialize
  * @returns {object} MCP response object
  */
 export function jsonResponse(data) {
-  return {
-    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
-  };
+  return toolText(JSON.stringify(data, (_k, v) => (typeof v === 'string' ? redact(v) : v)));
 }
 
 /**
@@ -20,9 +34,7 @@ export function jsonResponse(data) {
  * @returns {object} MCP response object
  */
 export function textResponse(text) {
-  return {
-    content: [{ type: 'text', text }],
-  };
+  return toolText(text);
 }
 
 /**
@@ -31,10 +43,7 @@ export function textResponse(text) {
  * @returns {object} MCP response object with isError flag
  */
 export function errorResponse(message) {
-  return {
-    content: [{ type: 'text', text: `Error: ${message}` }],
-    isError: true,
-  };
+  return toolText(`Error: ${message}`, true);
 }
 
 /**
@@ -49,8 +58,5 @@ export function execResponse(result, timeout) {
     text += `\n[timed out after ${timeout}ms]`;
   }
   text += `\n[exit code: ${result.exitCode}]`;
-  return {
-    content: [{ type: 'text', text }],
-    isError: result.exitCode !== 0,
-  };
+  return toolText(text, result.exitCode !== 0);
 }

@@ -22,3 +22,7 @@ build/
 
 # Internal plans (not published)
 plans/
+
+# Runtime state / logs (never commit)
+known-hosts.json
+logs/
