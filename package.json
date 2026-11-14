@@ -29,11 +29,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Vivusk/mcp-ssh-persistent.git"
+    "url": "git+https://github.com/vivusk/mcp-ssh-persistent.git"
   },
-  "homepage": "https://github.com/Vivusk/mcp-ssh-persistent#readme",
+  "homepage": "https://github.com/vivusk/mcp-ssh-persistent#readme",
   "bugs": {
-    "url": "https://github.com/Vivusk/mcp-ssh-persistent/issues"
+    "url": "https://github.com/vivusk/mcp-ssh-persistent/issues"
   },
   "engines": {
     "node": ">=18"
