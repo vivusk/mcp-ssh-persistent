@@ -1,7 +1,7 @@
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { join, resolve } from 'path';
 import {
   loadConfig, resolveServer, getLimits, getConfigPath, resetConfigCache, listServerAliases,
@@ -27,8 +27,9 @@ after(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+const absKey = join(dir, 'keys', 'id'); // OS-absolute sample (C:/... is relative on darwin/linux)
 const sample = {
-  defaults: { privateKeyPath: 'C:/keys/id', keepaliveInterval: 20000 },
+  defaults: { privateKeyPath: absKey, keepaliveInterval: 20000 },
   servers: {
     S: { host: '192.0.2.10', username: 'root' },
     RR: { host: '192.0.2.11', username: 'deploy', port: 2222, fingerprint: 'SHA256:abc' },
@@ -47,7 +48,7 @@ test('resolveServer merges defaults and is case-insensitive', () => {
   assert.equal(s.alias, 'RR');
   assert.equal(s.host, '192.0.2.11');
   assert.equal(s.port, 2222);
-  assert.equal(s.privateKeyPath, 'C:/keys/id');
+  assert.equal(s.privateKeyPath, absKey);
   assert.equal(s.keepaliveInterval, 20000);
   assert.equal(s.keepaliveCountMax, 3);
   assert.equal(s.fingerprint, 'SHA256:abc');
@@ -97,4 +98,24 @@ test('getLimits over channel budget only warns', () => {
 test('server missing host/username is rejected', () => {
   useConfig({ servers: { Bad: { username: 'u' } } });
   assert.throws(() => resolveServer('bad'), /must define host and username/);
+});
+
+test('privateKeyPath: ~ expands to home, relative resolves against config dir', () => {
+  useConfig({
+    defaults: { privateKeyPath: '~/.ssh/k' },
+    servers: {
+      A: { host: 'h', username: 'u' },
+      B: { host: 'h', username: 'u', privateKeyPath: 'keys/k' },
+    },
+  });
+  assert.equal(resolveServer('a').privateKeyPath, join(homedir(), '.ssh', 'k'));
+  assert.equal(resolveServer('b').privateKeyPath, join(dir, 'keys', 'k'));
+  assert.equal(loadConfig().defaults.privateKeyPath, join(homedir(), '.ssh', 'k'));
+});
+
+test('localPathRoots / localPathDeny expand leading ~ only', () => {
+  useConfig({ servers: {}, localPathRoots: ['~/work', 'rel', '~user/x'], localPathDeny: ['~/work/secret'] });
+  const cfg = loadConfig();
+  assert.deepEqual(cfg.localPathRoots, [join(homedir(), 'work'), 'rel', '~user/x']);
+  assert.deepEqual(cfg.localPathDeny, [join(homedir(), 'work', 'secret')]);
 });

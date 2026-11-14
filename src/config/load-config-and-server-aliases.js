@@ -4,7 +4,9 @@
  * validates it (no passwords allowed) and exposes alias lookup + limits.
  */
 import { readFileSync } from 'fs';
+import { dirname, isAbsolute, resolve } from 'path';
 import { log } from '../utils/logger.js';
+import { expandHome } from '../utils/expand-home-path.js';
 import { getConfigPath } from './data-dir-paths.js';
 
 export { getConfigPath };
@@ -42,6 +44,19 @@ function rejectPasswords(node, path = 'config') {
   }
 }
 
+/** `~` -> home; relative -> config dir; absolute kept verbatim. Non-strings unchanged. */
+function normaliseKeyPath(p, configDir) {
+  const expanded = expandHome(p);
+  if (typeof expanded !== 'string' || expanded === '' || isAbsolute(expanded)) return expanded;
+  return resolve(configDir, expanded);
+}
+
+/** Copy of a settings object with its privateKeyPath normalised (non-objects returned as-is). */
+function withKeyPath(settings, configDir) {
+  if (!settings || typeof settings !== 'object' || !('privateKeyPath' in settings)) return settings;
+  return { ...settings, privateKeyPath: normaliseKeyPath(settings.privateKeyPath, configDir) };
+}
+
 /**
  * Load and validate config (cached after first successful read).
  * Missing file -> empty config. Invalid JSON or password fields -> throws.
@@ -68,11 +83,13 @@ export function loadConfig() {
     throw new Error(`config ${path} must be a JSON object`);
   }
   rejectPasswords(parsed);
+  const configDir = dirname(path);
+  const servers = parsed.servers || {};
   cached = {
-    defaults: parsed.defaults || {},
-    servers: parsed.servers || {},
-    localPathRoots: Array.isArray(parsed.localPathRoots) ? parsed.localPathRoots : [],
-    localPathDeny: Array.isArray(parsed.localPathDeny) ? parsed.localPathDeny : [],
+    defaults: withKeyPath(parsed.defaults || {}, configDir),
+    servers: Object.fromEntries(Object.entries(servers).map(([k, v]) => [k, withKeyPath(v, configDir)])),
+    localPathRoots: Array.isArray(parsed.localPathRoots) ? parsed.localPathRoots.map(expandHome) : [],
+    localPathDeny: Array.isArray(parsed.localPathDeny) ? parsed.localPathDeny.map(expandHome) : [],
     limits: parsed.limits || {},
   };
   return cached;

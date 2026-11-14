@@ -29,3 +29,9 @@ test('without env: package config.json if present, else ~/.mcp-ssh-persistent', 
     assert.equal(getConfigPath(), expected);
   });
 });
+
+test('MCP_SSH_CONFIG leading ~ expands to home', () => {
+  withEnv('~/x/cfg.json', () => {
+    assert.equal(getConfigPath(), resolve(homedir(), 'x', 'cfg.json'));
+  });
+});
