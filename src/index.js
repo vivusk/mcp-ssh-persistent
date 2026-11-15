@@ -8,6 +8,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
 import { getToolDefinitions } from './tools/definitions.js';
+import { buildServerInstructions } from './tools/server-instructions.js';
 import { createHandlers } from './tools/handlers.js';
 import { createSessionPool } from './ssh/session-pool.js';
 import { errorResponse } from './utils/response.js';
@@ -52,7 +53,7 @@ process.on('uncaughtException', (err) => {
 
 const server = new Server(
   { name: 'mcp-ssh-persistent', version: '1.0.0' },
-  { capabilities: { tools: {} } }
+  { capabilities: { tools: {} }, instructions: buildServerInstructions() }
 );
 
 // Built per request so the `server` param lists the aliases currently in config.
