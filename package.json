@@ -1,6 +1,6 @@
 {
   "name": "mcp-ssh-persistent",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "MCP Server for persistent SSH connections with streaming support",
   "type": "module",
   "main": "src/index.js",
